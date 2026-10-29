@@ -587,6 +587,44 @@ class UncoveredGroupSerializer(serializers.Serializer):
     draft_description = serializers.CharField(
         allow_null=True, help_text="Proposed metric description, when one was drafted."
     )
+    draft_definition = serializers.CharField(
+        allow_null=True, help_text="Proposed HogQL definition, when one was drafted."
+    )
+
+
+class ChartSourceSerializer(serializers.Serializer):
+    insight_short_id = serializers.CharField(help_text="Short ID of the saved chart, for a link to it.")
+    insight_name = serializers.CharField(help_text="Name of the saved chart.")
+    dashboard_id = serializers.IntegerField(allow_null=True, help_text="The dashboard that ran the chart, if any.")
+    dashboard_name = serializers.CharField(allow_null=True, help_text="Name of the dashboard, if any.")
+    people = serializers.IntegerField(help_text="Distinct people whose visit ran the chart. Viewers count.")
+    runs = serializers.IntegerField(help_text="Query runs from this chart.")
+
+
+class SurfaceSourceSerializer(serializers.Serializer):
+    product = serializers.CharField(help_text="The web app area that ran the query. Empty when it is unknown.")
+    people = serializers.IntegerField(help_text="Distinct people who ran the query there.")
+    runs = serializers.IntegerField(help_text="Query runs from that area.")
+
+
+class AgentSourceSerializer(serializers.Serializer):
+    people = serializers.IntegerField(help_text="Distinct people whose agents ran the query, without scouts.")
+    sessions = serializers.IntegerField(help_text="Agent sessions that ran the query, without scouts.")
+    runs = serializers.IntegerField(help_text="Query runs by agents, without scouts.")
+
+
+class ProposedMetricSerializer(serializers.Serializer):
+    name = serializers.CharField(help_text="Proposed metric name.")
+    description = serializers.CharField(help_text="What the proposed metric counts.")
+    definition = serializers.CharField(allow_blank=True, help_text="Proposed HogQL definition.")
+    measures = serializers.IntegerField(help_text="Recurring measures that this proposal merges.")
+    people = serializers.IntegerField(help_text="Distinct people across the measures, without scouts.")
+    active_days = serializers.IntegerField(help_text="Distinct days with a run across the measures.")
+    runs = serializers.IntegerField(help_text="Query runs of the most-run measure in the proposal.")
+    charts = ChartSourceSerializer(many=True, help_text="The saved charts with the most people.")
+    other_charts = serializers.IntegerField(help_text="Saved charts that are not listed in charts.")
+    surfaces = SurfaceSourceSerializer(many=True, help_text="Web app areas that ran it outside a saved chart.")
+    agents = AgentSourceSerializer(allow_null=True, help_text="Agent use, or null when no agent ran it.")
 
 
 class UsageSnapshotPayloadSerializer(serializers.Serializer):
@@ -602,6 +640,9 @@ class UsageSnapshotPayloadSerializer(serializers.Serializer):
     )
     uncovered = UncoveredGroupSerializer(
         many=True, allow_null=True, help_text="Recurring query shapes and their catalog outcome. Null until grouped."
+    )
+    proposed_metrics = ProposedMetricSerializer(
+        many=True, allow_null=True, help_text="Proposed metrics with their sources. Null until drafted."
     )
 
 

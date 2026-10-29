@@ -898,6 +898,75 @@ export interface UncoveredGroupApi {
      * @nullable
      */
     draft_description: string | null
+    /**
+     * Proposed HogQL definition, when one was drafted.
+     * @nullable
+     */
+    draft_definition: string | null
+}
+
+export interface ChartSourceApi {
+    /** Short ID of the saved chart, for a link to it. */
+    insight_short_id: string
+    /** Name of the saved chart. */
+    insight_name: string
+    /**
+     * The dashboard that ran the chart, if any.
+     * @nullable
+     */
+    dashboard_id: number | null
+    /**
+     * Name of the dashboard, if any.
+     * @nullable
+     */
+    dashboard_name: string | null
+    /** Distinct people whose visit ran the chart. Viewers count. */
+    people: number
+    /** Query runs from this chart. */
+    runs: number
+}
+
+export interface SurfaceSourceApi {
+    /** The web app area that ran the query. Empty when it is unknown. */
+    product: string
+    /** Distinct people who ran the query there. */
+    people: number
+    /** Query runs from that area. */
+    runs: number
+}
+
+export interface AgentSourceApi {
+    /** Distinct people whose agents ran the query, without scouts. */
+    people: number
+    /** Agent sessions that ran the query, without scouts. */
+    sessions: number
+    /** Query runs by agents, without scouts. */
+    runs: number
+}
+
+export interface ProposedMetricApi {
+    /** Proposed metric name. */
+    name: string
+    /** What the proposed metric counts. */
+    description: string
+    /** Proposed HogQL definition. */
+    definition: string
+    /** Recurring measures that this proposal merges. */
+    measures: number
+    /** Distinct people across the measures, without scouts. */
+    people: number
+    /** Distinct days with a run across the measures. */
+    active_days: number
+    /** Query runs of the most-run measure in the proposal. */
+    runs: number
+    /** The saved charts with the most people. */
+    charts: ChartSourceApi[]
+    /** Saved charts that are not listed in charts. */
+    other_charts: number
+    /** Web app areas that ran it outside a saved chart. */
+    surfaces: SurfaceSourceApi[]
+    /** Agent use, or null when no agent ran it. */
+    agents: AgentSourceApi | null
 }
 
 export interface UsageSnapshotPayloadApi {
@@ -923,6 +992,11 @@ export interface UsageSnapshotPayloadApi {
      * @nullable
      */
     uncovered: UncoveredGroupApi[] | null
+    /**
+     * Proposed metrics with their sources. Null until drafted.
+     * @nullable
+     */
+    proposed_metrics: ProposedMetricApi[] | null
 }
 
 export interface UsageSnapshotApi {
