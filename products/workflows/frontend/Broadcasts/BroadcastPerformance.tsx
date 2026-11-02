@@ -7,6 +7,7 @@ import { humanFriendlyNumber, percentage } from 'lib/utils/numbers'
 
 import { EmailLinksTable } from '../Workflows/EmailLinksTable'
 import { BroadcastPerformanceLogicProps, broadcastPerformanceLogic } from './broadcastPerformanceLogic'
+import { BroadcastRunErrors } from './BroadcastRunErrors'
 import { BroadcastSendActivity } from './BroadcastSendActivity'
 
 function share(part: number, whole: number): string {
@@ -72,6 +73,10 @@ export function BroadcastPerformance({
                     </div>
                 ))}
             </div>
+
+            {stats.errored > 0 ? (
+                <BroadcastRunErrors runId={props.runId} runStartedAt={props.runStartedAt} count={stats.errored} />
+            ) : null}
 
             {trackingOff ? (
                 <LemonBanner type="info">

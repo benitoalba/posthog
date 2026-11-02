@@ -31,6 +31,8 @@ export interface BroadcastPerformanceStats {
     converted: number
     /** Push only: people with no device registered for the app. */
     skipped: number
+    /** Sends that stopped at an error before reaching the provider, such as an email that couldn't render. */
+    errored: number
 }
 
 const TOTALS_METRICS = [
@@ -48,6 +50,8 @@ const TOTALS_METRICS = [
     'push_opened',
     'email_unsubscribed',
     'conversion',
+    // Recorded when a step throws, so a send that never reached the provider has no email_failed or push_failed.
+    'failed',
 ]
 
 const SEND_ACTIVITY_METRICS: Record<BroadcastChannel, string[]> = {
@@ -238,6 +242,7 @@ export const broadcastPerformanceLogic = kea<broadcastPerformanceLogicType>([
                         converted: totals.conversion ?? 0,
                         skipped: totals.push_skipped ?? 0,
                         unsubscribed: 0,
+                        errored: totals.failed ?? 0,
                     }
                 }
                 const sent = totals.email_sent ?? 0
@@ -254,6 +259,7 @@ export const broadcastPerformanceLogic = kea<broadcastPerformanceLogicType>([
                     trackedSends: Math.max(sent - (totals.email_untracked ?? 0), 0),
                     converted: totals.conversion ?? 0,
                     skipped: 0,
+                    errored: totals.failed ?? 0,
                 }
             },
         ],

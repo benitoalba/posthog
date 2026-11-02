@@ -67,6 +67,33 @@ describe('broadcastPerformanceLogic', () => {
         expect(logic.values.stats?.sent).toEqual(49)
     })
 
+    it.each(['email', 'push'] as const)(
+        'counts %s sends that stopped at an error before reaching the provider',
+        async (channel) => {
+            // Rows only for metrics the query asks for, so dropping a metric from it fails the test.
+            const rows: [number, string][] = [
+                [0, 'email_sent'],
+                [0, 'push_sent'],
+                [245, 'failed'],
+            ]
+            jest.spyOn(api, 'queryHogQL').mockImplementation(
+                async (query) =>
+                    ({
+                        results: rows.filter(([, name]) => String(query).includes(`'${name}'`)),
+                    }) as HogQLQueryResponse
+            )
+            const logic = broadcastPerformanceLogic({
+                runId: `run-errored-${channel}`,
+                runStartedAt: '2026-10-19T22:28:56Z',
+                channel,
+            })
+            logic.mount()
+
+            await expectLogic(logic).toDispatchActions(['loadTotalsSuccess'])
+            expect(logic.values.stats).toMatchObject({ sent: 0, failed: 0, errored: 245 })
+        }
+    )
+
     it('does not report tracking off before anything was sent', async () => {
         jest.spyOn(api, 'queryHogQL').mockResolvedValue({ results: [] } as unknown as HogQLQueryResponse)
         const logic = broadcastPerformanceLogic({ runId: 'run-2', runStartedAt: '2026-10-19T22:28:56Z' })
