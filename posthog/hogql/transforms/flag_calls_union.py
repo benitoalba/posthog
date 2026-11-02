@@ -132,6 +132,9 @@ def union_unreadable_reason(node: ast.AST, context: HogQLContext) -> str | None:
     columns = FlagEvaluationsColumns(
         database.get_table(EVENTS_WITH_FLAG_CALLS_CHAIN), database.get_table(["posthog", "flag_evaluations"])
     )
+    if collector.export_collision is not None:
+        first, second = (".".join(str(part) for part in chain) for chain in collector.export_collision)
+        return f"it reads {first} and {second}, which the union would return as one column"
     for chain in collector.chains:
         if columns.chain(chain) is None:
             return f"it reads {'.'.join(str(part) for part in chain)}, which that table doesn't have"
@@ -528,9 +531,18 @@ class _UnionChainCollector(SyntaxVisitor):
         super().__init__()
         self.chains: list[list[str | int]] = []
         self.unreadable_joins: list[str] = []
+        self.exports: dict[tuple[int, str], list[str | int]] = {}
+        self._select: ast.SelectQuery | None = None
+        self.export_collision: tuple[list[str | int], list[str | int]] | None = None
         # The event and person properties that a string-parsing call such as toFloatOrZero reads from the scan.
         self.string_parsed: list[tuple[str, str]] = []
         self._in_string_input = False
+
+    def visit_select_query(self, node: ast.SelectQuery) -> None:
+        outer = self._select
+        self._select = node
+        super().visit_select_query(node)
+        self._select = outer
 
     def visit_call(self, node: ast.Call) -> None:
         # The property type swapper keeps a property raw only as the direct argument of such a call.
@@ -544,12 +556,12 @@ class _UnionChainCollector(SyntaxVisitor):
         if read is not None:
             chain = read[1]
             self.chains.append(chain)
-            # Lazy table resolution names a whole-field read after the field, whichever table the field is on.
-            # It names a property read by joining the path with `___`, so `a.b` and `a___b` share a name.
-            name = node.type.name if isinstance(node.type, ast.FieldType) else "___".join(str(link) for link in chain)
-            first = self.exports.setdefault((id(self._select), name), chain)
-            if first != chain and self.export_collision is None:
-                self.export_collision = (first, chain)
+            if not isinstance(node.type, ast.FieldType):
+                # Lazy table resolution names a property read by joining the path with `___`, so `a.b` and `a___b` share a name.
+                name = "___".join(str(link) for link in chain)
+                first = self.exports.setdefault((id(self._select), name), chain)
+                if first != chain and self.export_collision is None:
+                    self.export_collision = (first, chain)
             if self._in_string_input and chain[:-1] in (["properties"], ["poe", "properties"]):
                 self.string_parsed.append(("event" if chain[0] == "properties" else "person", str(chain[-1])))
             return
