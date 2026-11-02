@@ -15,6 +15,7 @@ from products.business_knowledge.backend.api.playground import BusinessKnowledge
 from products.business_knowledge.backend.constants import MAX_OPEN_RUNS_PER_OWNER
 from products.business_knowledge.backend.models import PlaygroundChat, PlaygroundTurn
 from products.tasks.backend.models import Task, TaskRun
+from products.tasks.backend.temporal.process_task.utils import mcp_exclude_tools_for_task
 
 WORKFLOW = "products.tasks.backend.temporal.client.execute_task_processing_workflow"
 
@@ -194,7 +195,10 @@ class TestPlaygroundChatAPI(APIBaseTest):
         assert successor.task_id == first_run.task_id
         assert successor.state["resume_from_run_id"] == str(first_run.id)
         assert successor.state["pending_user_message"] == "And after 30 days?"
-        assert successor.state["mcp_exclude_tools"] == first_run.state["mcp_exclude_tools"]
+        assert "mcp_exclude_tools" not in successor.state
+        assert mcp_exclude_tools_for_task(successor.task, successor.state) == mcp_exclude_tools_for_task(
+            first_run.task, first_run.state
+        )
         assert successor.state["config_snapshot"] == first_run.state["config_snapshot"]
         assert successor.state["model"] == first_run.state["model"]
         assert successor.state["runtime_adapter"] == first_run.state["runtime_adapter"]
