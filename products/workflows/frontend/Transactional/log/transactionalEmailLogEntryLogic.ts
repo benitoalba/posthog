@@ -1,4 +1,4 @@
-import { MakeLogicType, afterMount, connect, kea, key, listeners, path, props, selectors } from 'kea'
+import { MakeLogicType, afterMount, connect, kea, key, listeners, path, props, reducers, selectors } from 'kea'
 import { loaders } from 'kea-loaders'
 import posthog from 'posthog-js'
 
@@ -20,6 +20,7 @@ export interface transactionalEmailLogEntryLogicValues {
     currentProjectId: number | null // projectLogic
     breadcrumbs: Breadcrumb[]
     email: TransactionalEmailLogDetailApi | null | undefined
+    emailFailed: boolean
     emailLoading: boolean
 }
 
@@ -70,6 +71,16 @@ export const transactionalEmailLogEntryLogic = kea<transactionalEmailLogEntryLog
         key,
     ]),
     connect(() => ({ values: [projectLogic, ['currentProjectId']] })),
+    reducers({
+        emailFailed: [
+            false,
+            {
+                loadEmail: () => false,
+                loadEmailSuccess: () => false,
+                loadEmailFailure: () => true,
+            },
+        ],
+    }),
     loaders(({ props, values }) => ({
         // undefined until the first load answers, null when the project has no send with this ID.
         email: [

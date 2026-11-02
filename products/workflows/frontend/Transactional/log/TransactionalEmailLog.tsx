@@ -2,10 +2,11 @@ import { useActions, useValues } from 'kea'
 import { router } from 'kea-router'
 
 import { IconCursorClick, IconEye } from '@posthog/icons'
-import { LemonButton, LemonInput, LemonSelect, LemonTag, Tooltip } from '@posthog/lemon-ui'
+import { LemonBanner, LemonButton, LemonInput, LemonSelect, LemonTag, Tooltip } from '@posthog/lemon-ui'
 
 import { TZLabel } from 'lib/components/TZLabel'
 import { LemonTable } from 'lib/lemon-ui/LemonTable'
+import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
 import { urls } from 'scenes/urls'
 
 import type { TransactionalEmailLogEntryApi } from 'products/messaging/frontend/generated/api.schemas'
@@ -15,8 +16,8 @@ import { EMAIL_STATUS_DESCRIPTION, EMAIL_STATUS_LABEL, EMAIL_STATUS_TAG, emailRe
 import { LOG_DATE_RANGES, transactionalEmailLogLogic } from './transactionalEmailLogLogic'
 
 export function TransactionalEmailLog(): JSX.Element {
-    const { emails, pageLoading, hasMore, filters, isFiltered } = useValues(transactionalEmailLogLogic)
-    const { setFilters, loadMore } = useActions(transactionalEmailLogLogic)
+    const { emails, pageLoading, pageFailed, hasMore, filters, isFiltered } = useValues(transactionalEmailLogLogic)
+    const { setFilters, loadMore, loadEmails } = useActions(transactionalEmailLogLogic)
     const { transactionalTemplates } = useValues(messageTemplatesLogic)
 
     const emailOptions = transactionalTemplates
@@ -64,6 +65,18 @@ export function TransactionalEmailLog(): JSX.Element {
                     data-attr="transactional-email-log-date-filter"
                 />
             </div>
+            {pageFailed && (
+                <LemonBanner
+                    type="error"
+                    action={{
+                        children: 'Try again',
+                        onClick: () => loadEmails(),
+                        'data-attr': 'transactional-email-log-retry',
+                    }}
+                >
+                    The log couldn't load. Check your connection and try again.
+                </LemonBanner>
+            )}
             <LemonTable<TransactionalEmailLogEntryApi>
                 dataSource={emails}
                 loading={pageLoading}
@@ -78,9 +91,10 @@ export function TransactionalEmailLog(): JSX.Element {
                         title: 'Recipient',
                         key: 'recipient',
                         render: (_, email) => (
-                            <span className="font-medium break-all" title={email.recipient}>
-                                {email.recipient || <span className="text-secondary">Unknown recipient</span>}
-                            </span>
+                            <LemonTableLink
+                                to={urls.transactionalEmailLogEntry(email.message_id)}
+                                title={<span className="break-all">{email.recipient || 'Unknown recipient'}</span>}
+                            />
                         ),
                     },
                     {
@@ -132,9 +146,11 @@ export function TransactionalEmailLog(): JSX.Element {
                     },
                 ]}
                 emptyState={
-                    isFiltered
-                        ? 'No sends match these filters'
-                        : 'No transactional emails sent in this period. Sends from your code show up here within a few seconds.'
+                    pageFailed
+                        ? "The log couldn't load"
+                        : isFiltered
+                          ? 'No sends match these filters'
+                          : 'No transactional emails sent in this period. Sends from your code show up here within a few seconds.'
                 }
             />
             {hasMore && (

@@ -1,6 +1,6 @@
-import { useValues } from 'kea'
+import { useActions, useValues } from 'kea'
 
-import { LemonButton, LemonSkeleton } from '@posthog/lemon-ui'
+import { LemonBanner, LemonButton, LemonSkeleton } from '@posthog/lemon-ui'
 
 import { NotFound } from 'lib/components/NotFound'
 import { useFeatureFlag } from 'lib/hooks/useFeatureFlag'
@@ -29,10 +29,27 @@ export const scene: SceneExport<TransactionalEmailLogEntryLogicProps> = {
 export function TransactionalEmailLogEntryScene(): JSX.Element {
     const showTransactional = useFeatureFlag('WORKFLOWS_TRANSACTIONAL_EMAIL_API')
     // The scene binds the logic to the message ID in the URL.
-    const { email, emailLoading } = useValues(transactionalEmailLogEntryLogic)
+    const { email, emailLoading, emailFailed } = useValues(transactionalEmailLogEntryLogic)
+    const { loadEmail } = useActions(transactionalEmailLogEntryLogic)
 
     if (!showTransactional) {
         return <NotFound object="page" />
+    }
+    if (emailFailed && !emailLoading) {
+        return (
+            <SceneContent>
+                <LemonBanner
+                    type="error"
+                    action={{
+                        children: 'Try again',
+                        onClick: () => loadEmail(),
+                        'data-attr': 'transactional-email-log-entry-retry',
+                    }}
+                >
+                    This email couldn't load. Check your connection and try again.
+                </LemonBanner>
+            </SceneContent>
+        )
     }
     if (email === null && !emailLoading) {
         return (
