@@ -163,7 +163,22 @@ Bars use `hitArea: 'band'`.
 `onHoverIndexChange` lets a consumer drive a hover-following headline without subscribing to `useChartHover` itself.
 `minBarSize` is not exposed.
 
-## Metric helpers
+## MetricCard
 
-The metric tile is `Metric` in `@posthog/quill-components/metric`, published as `@posthog/quill/metric` (it needs `Card` and `Badge` from primitives, which charts cannot depend on).
-It is built on `Sparkline` plus the headless helpers this package exports: `resolveDelta` and `computeFallbackChangePercent` (delta math), `useAnimatedNumber` (count-up headline), `useHoverIntent` (hover dwell), and the `MetricChange`, `ResolvedDelta`, and `ChangeColor` types.
+Deprecated: use `Metric` from `@posthog/quill-components/metric` (`@posthog/quill/metric` from npm).
+`MetricCard` stays only so apps that pin an older version can upgrade without a break.
+
+A left-aligned tile: headline number, change pill, sparkline.
+
+- `title={null}` drops the title row. The header band collapses when there is no title and no change pill, and the subtitle row is omitted when there is no subtitle and no `labels`, so a value-only card renders just the number.
+- `changeSize="md"` renders a larger pill (default `sm`); `changeInline` puts it beside the headline instead of in the header. The inline pill wraps under the headline when the card is too narrow for both.
+- `headlineClassName` replaces the headline's default `text-4xl`, for example with container query sizes so a narrow tile keeps the number on one line.
+- `sparklineFill` makes the sparkline fill the card's remaining height instead of a fixed `sparklineHeight`; `sparklineDashedFromIndex` dashes it from that index onward (an in-progress trailing period).
+- `subtitle` always wins. `restingSubtitle` (`'Avg'`) shows only at rest and yields to the hovered point's label on hover; pair it with a `value` that summarizes the series.
+- `formatLabel` formats the point label in the default subtitle, for example an ISO time as a short date. The sparkline keeps the raw `labels`, so they stay unique.
+- `hoverChangeFromPreviousPoint` keeps the resting `change` pill at rest but, while hovering, swaps it for the hovered point's change versus the previous point (hidden at the first point).
+- `changeTooltip` shows a styled hover tooltip on the change pill, using the host's tooltip surface tokens with chart-surface fallbacks.
+- `change.value` is a percent, so `8` reads as +8%. Its sign sets the pill's direction, and `goodDirection` decides whether that direction is good. `change.label` replaces the formatted text, for example `+1.1 pts` for a change in percentage points.
+
+`Metric` lives in `@posthog/quill-components` because it needs `Card` and `Badge` from primitives, which charts cannot depend on.
+It is built on `Sparkline` plus the headless helpers this package exports: `resolveDelta` and `computeFallbackChangePercent` (delta math), `useAnimatedNumber` (count-up headline), `useHoverIntent` (hover dwell), and the `MetricChange` and `ResolvedDelta` types.

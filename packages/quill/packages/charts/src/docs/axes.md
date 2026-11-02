@@ -12,7 +12,7 @@ The matching config switches are the library default through `DEFAULT_CHART_CONF
 `LineChart`, `BarChart`, `ComboChart`, and their time-series variants layer it under `config` via `applyChartDefaults`, so a consumer opts out field by field (`showGrid: false`).
 The nested `tooltip` merges key by key, so setting one field keeps `placement: 'cursor'`.
 `ScatterChart` renders the same chrome from its own inline defaults.
-`Sparkline` builds its own chromeless config.
+`Sparkline` and `MetricCard` build their own chromeless config.
 
 ## Grid, axis lines, tick marks
 

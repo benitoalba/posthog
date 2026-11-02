@@ -4,8 +4,8 @@ import type { ChartConfig } from './types'
  *  a monotone line curve, rounded bars, and a cursor-anchored tooltip. LineChart, BarChart,
  *  ComboChart, and their TimeSeries variants layer this under a chart's `config` via
  *  `applyChartDefaults`, so a consumer opts out field by field; ScatterChart renders the same chrome
- *  from its own inline defaults. Sparkline builds its own config that opts out of the chrome, so it
- *  stays chromeless. Still exported for hosts that build a config object directly. */
+ *  from its own inline defaults. Sparkline and MetricCard build their own config that opts out of the
+ *  chrome, so they stay chromeless. Still exported for hosts that build a config object directly. */
 export const DEFAULT_CHART_CONFIG = {
     curve: 'monotone',
     showAxisLines: true,
