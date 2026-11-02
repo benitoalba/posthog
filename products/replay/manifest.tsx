@@ -63,7 +63,7 @@ export const manifest: ProductManifest = {
             intents: [ProductKey.SESSION_REPLAY, ProductKey.MOBILE_REPLAY],
             category: ProductItemCategory.PRODUCT_ENGINEERING,
             href: urls.replay(ReplayTabs.Home),
-            searchKeywords: ['recordings', 'session recording'],
+            searchKeywords: ['recordings', 'session recording', 'replay', 'replays'],
             searchTabs: [
                 { name: 'Collections', href: urls.replay(ReplayTabs.Playlists), searchKeywords: ['playlists'] },
             ],
