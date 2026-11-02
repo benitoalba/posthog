@@ -66,7 +66,7 @@ function useMetric(part: string): MetricContextValue {
 const DEFAULT_FORMAT_VALUE = (v: number): string => v.toLocaleString()
 const DEFAULT_FORMAT_LABEL = (label: string): React.ReactNode => label
 const DEFAULT_FORMAT_CHANGE = (p: number): string => {
-    // Matches the monolithic MetricCard: `percentage` carries the sign for negatives, we prepend `+`.
+    // `percentage` carries the sign for negatives, we prepend `+`.
     const formatted = percentage(p / 100, 1, true)
     return p > 0 ? `+${formatted}` : formatted
 }

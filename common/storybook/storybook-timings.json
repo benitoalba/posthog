@@ -1615,10 +1615,6 @@
         "chromium": 43.96,
         "webkit": 5.995
     },
-    "packages/quill/packages/charts/src/components/MetricCard/MetricCard.stories.tsx": {
-        "chromium": 23.105,
-        "webkit": 4.234
-    },
     "packages/quill/packages/charts/src/overlays/DefaultTooltip.stories.tsx": {
         "chromium": 8.898,
         "webkit": 3.269

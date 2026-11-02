@@ -1,6 +1,6 @@
 import { useValues } from 'kea'
 
-import { MetricCard } from '@posthog/quill-charts'
+import { Metric, MetricSparkline, MetricSubtitle, MetricTitle, MetricValue } from '@posthog/quill-components/metric'
 
 import { useChartTheme } from 'lib/charts/hooks'
 import { getColorVar } from 'lib/colors'
@@ -47,9 +47,8 @@ export function StatPanel({ series, display, fallbackName }: MetricsPanelProps):
         // The headline shows the hovered sparkline point, so it shares one scale with every point.
         const formatValue = metricValuesFormatter(row.series.unit ?? undefined, [...data, value ?? 0])
         return (
-            <MetricCard
+            <Metric
                 key={index}
-                title={single ? null : name}
                 value={value ?? undefined}
                 data={data}
                 labels={row.series.points.map((p) => p.time)}
@@ -60,13 +59,18 @@ export function StatPanel({ series, display, fallbackName }: MetricsPanelProps):
                 theme={theme}
                 color={color}
                 formatValue={formatValue}
-                headlineClassName="whitespace-nowrap text-2xl @min-[13rem]:text-3xl @min-[16rem]:text-4xl"
-                changeInline
                 sparklineFill={single}
                 sparklineHeight={GROUPED_SPARKLINE_HEIGHT}
-                sparklineClassName="mt-2"
-                className={cn('@container min-w-0', single && 'h-full')}
-            />
+                className="@container w-full min-w-0 px-0"
+            >
+                {!single && <MetricTitle>{name}</MetricTitle>}
+                <MetricValue
+                    className={cn('text-2xl @min-[13rem]:text-3xl @min-[16rem]:text-4xl', !single && 'mt-2')}
+                    style={{ color }}
+                />
+                <MetricSubtitle className="mt-1" />
+                <MetricSparkline className="mt-2" />
+            </Metric>
         )
     })
 
