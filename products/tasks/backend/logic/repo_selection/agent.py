@@ -19,11 +19,11 @@ from posthog.models.team.team import Team
 from posthog.models.user_integration import UserGitHubIntegration, UserIntegration
 from posthog.sync import database_sync_to_async
 
+from products.tasks.backend.facade.profiles import TaskProfile, TaskSource
 from products.tasks.backend.logic.repo_selection.types import RepoSelectionResult
 from products.tasks.backend.logic.services.custom_prompt_internals import CustomPromptSandboxContext
 from products.tasks.backend.logic.services.custom_prompt_multi_turn_runner import MultiTurnSession
 from products.tasks.backend.logic.services.sandbox import SandboxResources
-from products.tasks.backend.models import Task
 
 if TYPE_CHECKING:
     from products.tasks.backend.logic.services.custom_prompt_internals import OutputFn
@@ -643,12 +643,12 @@ async def select_repository(
     user_id: int,
     context: str,
     *,
-    origin_product: Task.OriginProduct,
+    profile: TaskProfile,
     priority: Priority,
+    source: TaskSource | None = None,
     github: GitHubIntegrationBase | None = None,
     candidate_repos: list[str] | None = None,
     step_name: str = "repo_selection",
-    signal_report_id: str | None = None,
     spend_signal_id: str | None = None,
     sandbox_environment_id: str | None = None,
     verbose: bool = False,
@@ -787,11 +787,10 @@ async def select_repository(
             step_name=step_name,
             verbose=verbose,
             output_fn=output_fn,
-            origin_product=origin_product,
-            signal_report_id=signal_report_id,
+            profile=profile,
+            source=source,
             spend_signal_id=spend_signal_id,
             ai_stage="repo_selection",
-            internal=True,
             # An unreadable end turn used to fail the whole selection, and the caller then dropped the
             # user into a manual repository picker. Read the pick out of the raw reply instead.
             fallback_from_text=_salvage,
