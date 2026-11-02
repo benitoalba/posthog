@@ -60,7 +60,12 @@ FLOW_SOURCE = TaskSource(kind=SourceKind.HOG_FLOW, id=str(SOURCE_ID))
 REPORT_PROFILE = replace(BUSINESS_KNOWLEDGE, key="test.report", source_kind=SourceKind.SIGNAL_REPORT)
 POSTHOG_AI_BOT_PROFILE = replace(BUSINESS_KNOWLEDGE, key="test.posthog_ai_bot", origin_product="posthog_ai")
 PI_PROFILE = replace(BUSINESS_KNOWLEDGE, key="test.pi", runtimes=("pi",))
-NO_GITHUB_PROFILE = replace(BUSINESS_KNOWLEDGE, key="test.no_github", github_resolution=GithubResolution.NEVER)
+NO_GITHUB_PROFILE = replace(
+    BUSINESS_KNOWLEDGE,
+    key="test.no_github",
+    github_resolution=GithubResolution.NEVER,
+    github_access=GithubAccess.NONE,
+)
 SUPPORT_AGENT_PROFILE = replace(BUSINESS_KNOWLEDGE, key="test.support_agent", mcp_agent="support")
 
 # Far enough back that any bump is unambiguously forward, and stable so a test can assert the
