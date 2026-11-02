@@ -105,8 +105,7 @@ export function MetricTile({
                     <LemonSkeleton className="h-7 w-20" />
                 </div>
             ) : (
-                // These tiles have no series data and often a non-numeric headline ("3 / 5", "2h 10m"),
-                // so the pre-formatted display string renders as the value's children.
+                // The headline is often non-numeric ("3 / 5", "2h 10m"), so it renders as children.
                 <Metric value={0} subtitle={sub} className="px-0">
                     <MetricTitle>{labelNode}</MetricTitle>
                     <MetricValue className="mt-2">{value}</MetricValue>

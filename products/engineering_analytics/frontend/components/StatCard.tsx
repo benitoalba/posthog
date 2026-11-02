@@ -103,7 +103,6 @@ export function StatCard({
             <LemonSkeleton className="h-9 w-20" />
         </>
     ) : (
-        // Pre-formatted display string ('—' when no data yet) renders as the value's children.
         <Metric value={0} subtitle={caption} className="px-0">
             <MetricTitle className={active ? 'text-accent' : undefined}>{label}</MetricTitle>
             <MetricValue className="mt-2">{value}</MetricValue>
