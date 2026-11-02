@@ -1,9 +1,14 @@
 import { router } from 'kea-router'
 
+import api from 'lib/api'
+
 import { useMocks } from '~/mocks/jest'
+import type { HogQLQueryResponse } from '~/queries/schema/schema-general'
 import { initKeaTests } from '~/test/init'
 
-import { broadcastsLogic } from './broadcastsLogic'
+import type { HogFlowBatchJobApi } from 'products/workflows/frontend/generated/api.schemas'
+
+import { broadcastsLogic, loadRunMetricTotals } from './broadcastsLogic'
 
 describe('broadcastsLogic', () => {
     let logic: ReturnType<typeof broadcastsLogic.build>
@@ -21,6 +26,27 @@ describe('broadcastsLogic', () => {
     })
 
     afterEach(() => logic.unmount())
+
+    it("loads a run's error count with its other totals, for the list's errors tag", async () => {
+        const rows: [number, string][] = [
+            [0, 'email_sent'],
+            [245, 'failed'],
+        ]
+        jest.spyOn(api, 'queryHogQL').mockImplementation(async (query) => {
+            const filtered = String(query).includes('metric_name IN')
+            return {
+                results: rows.filter(([, name]) => !filtered || String(query).includes(`'${name}'`)),
+            } as HogQLQueryResponse
+        })
+
+        const totals = await loadRunMetricTotals(
+            { id: 'run-1', created_at: '2026-10-28T15:19:47Z' } as HogFlowBatchJobApi,
+            'UTC'
+        )
+
+        expect(totals.failed).toEqual(245)
+        jest.restoreAllMocks()
+    })
 
     it('keeps the filters when a link back to the list carries no query params', () => {
         router.actions.push('/broadcasts?status=sent&search=welcome')

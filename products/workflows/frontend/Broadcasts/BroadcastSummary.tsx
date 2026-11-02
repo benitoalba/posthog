@@ -32,12 +32,16 @@ import type { MessageAsset } from '../Workflows/messageAssetsApi'
 import { BroadcastAudienceCohorts } from './audience/BroadcastAudienceCohorts'
 import { broadcastAudienceCohortsLogic } from './audience/broadcastAudienceCohortsLogic'
 import { BroadcastEmailPreview } from './BroadcastEmailPreview'
+import { BroadcastErrorsTag } from './BroadcastErrorsTag'
 import { archiveDisabledReason, manageDisabledReason } from './broadcastLifecycle'
 import { BroadcastPerformance } from './BroadcastPerformance'
+import { broadcastPerformanceLogic } from './broadcastPerformanceLogic'
 import { BroadcastPushPerformance } from './BroadcastPushPerformance'
 import { BroadcastPushPreview } from './BroadcastPushPreview'
+import { BroadcastRunErrors } from './BroadcastRunErrors'
 import { BroadcastSceneHeader } from './BroadcastSceneHeader'
 import { broadcastSentLogic } from './broadcastSentLogic'
+import type { BroadcastChannel } from './broadcastsLogic'
 import { BroadcastStatusTag } from './BroadcastStatusTag'
 import { broadcastPath } from './broadcastUsage'
 import { broadcastWizardLogic } from './broadcastWizardLogic'
@@ -61,13 +65,16 @@ function RunRecipients({
     workflowId,
     runId,
     runCreatedAt,
+    channel,
 }: {
     workflowId: string
     runId: string
     runCreatedAt: string
+    channel: BroadcastChannel
 }): JSX.Element {
     return (
-        <div className="bg-surface-secondary border-t px-4 py-3 w-0 min-w-full">
+        <div className="bg-surface-secondary border-t px-4 py-3 w-0 min-w-full flex flex-col gap-3">
+            <BroadcastRunErrors runId={runId} runStartedAt={runCreatedAt} channel={channel} />
             <BindLogic logic={broadcastSentLogic} props={{ id: workflowId || 'new', parentRunId: runId, runCreatedAt }}>
                 <RunRecipientsTable workflowId={workflowId} />
             </BindLogic>
@@ -221,11 +228,13 @@ function RunsTable({
     batchJobs,
     batchJobsLoading,
     columns,
+    channel,
 }: {
     workflowId: string
     batchJobs: HogFlowBatchJobApi[]
     batchJobsLoading: boolean
     columns: LemonTableColumns<HogFlowBatchJobApi>
+    channel: BroadcastChannel
 }): JSX.Element {
     const { expandedRunIds } = useValues(broadcastWizardLogic)
     const { expandRun, collapseRun } = useActions(broadcastWizardLogic)
@@ -239,7 +248,12 @@ function RunsTable({
             nouns={['run', 'runs']}
             expandable={{
                 expandedRowRender: (job) => (
-                    <RunRecipients workflowId={workflowId} runId={job.id} runCreatedAt={job.created_at} />
+                    <RunRecipients
+                        workflowId={workflowId}
+                        runId={job.id}
+                        runCreatedAt={job.created_at}
+                        channel={channel}
+                    />
                 ),
                 rowExpandable: (job) => !!job.id,
                 // A table inside a table runs out of room first. Dropping the indent cell gives the
@@ -252,6 +266,11 @@ function RunsTable({
             emptyState="No runs yet. Scheduled broadcasts appear here after they send."
         />
     )
+}
+
+function LatestRunErrorsTag({ job, channel }: { job: HogFlowBatchJobApi; channel: BroadcastChannel }): JSX.Element {
+    const { errored } = useValues(broadcastPerformanceLogic({ runId: job.id, runStartedAt: job.created_at, channel }))
+    return <BroadcastErrorsTag count={errored} />
 }
 
 const LATEST_RUN_LABEL: Record<string, string> = {
@@ -403,7 +422,15 @@ export function BroadcastSummary(): JSX.Element {
 
     return (
         <SceneContent className="@container min-h-full w-full shrink-0" data-attr="broadcast-summary">
-            <BroadcastSceneHeader nameSuffix={<BroadcastStatusTag status={summaryStatus} />} actions={actionsMenu} />
+            <BroadcastSceneHeader
+                nameSuffix={
+                    <div className="flex flex-wrap items-center gap-1">
+                        <BroadcastStatusTag status={summaryStatus} />
+                        {latestBatchJob ? <LatestRunErrorsTag job={latestBatchJob} channel={channel} /> : null}
+                    </div>
+                }
+                actions={actionsMenu}
+            />
             <div className="mx-auto w-full max-w-6xl space-y-4">
                 {broadcastPath(broadcastId) === 'composer' ? <ComposerDraftFeedback /> : null}
                 {broadcast?.status === 'draft' ? (
@@ -541,6 +568,7 @@ export function BroadcastSummary(): JSX.Element {
                                     batchJobs={batchJobs}
                                     batchJobsLoading={batchJobsLoading}
                                     columns={batchJobColumns}
+                                    channel={channel}
                                 />
                             ),
                         },

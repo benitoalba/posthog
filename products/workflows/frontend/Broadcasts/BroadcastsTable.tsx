@@ -15,6 +15,7 @@ import { urls } from 'scenes/urls'
 
 import type { HogFlowMinimalApi } from 'products/workflows/frontend/generated/api.schemas'
 
+import { BroadcastErrorsTag } from './BroadcastErrorsTag'
 import { archiveDisabledReason, manageDisabledReason } from './broadcastLifecycle'
 import { BroadcastsEmptyState } from './BroadcastsEmptyState'
 import {
@@ -81,7 +82,13 @@ export function BroadcastsTable(): JSX.Element {
             title: 'Status',
             width: 0,
             render: (_, item) => {
-                return <BroadcastStatusTag status={getBroadcastStatus(item, rowDetailsById[item.id])} />
+                const details = rowDetailsById[item.id]
+                return (
+                    <div className="flex flex-wrap items-center gap-1">
+                        <BroadcastStatusTag status={getBroadcastStatus(item, details)} />
+                        <BroadcastErrorsTag count={details?.totals?.failed ?? 0} />
+                    </div>
+                )
             },
         },
         {

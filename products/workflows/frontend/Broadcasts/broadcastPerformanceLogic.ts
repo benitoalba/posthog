@@ -134,11 +134,11 @@ export interface broadcastPerformanceLogicActions {
 export interface broadcastPerformanceLogicMeta {
     key: string
     __keaTypeGenInternalSelectorTypes: {
-        errored: (totals: Record<string, number> | null) => number
         stats: (
             totals: Record<string, number> | null,
             arg: BroadcastChannel | undefined
         ) => BroadcastPerformanceStats | null
+        errored: (totals: Record<string, number> | null) => number
         trackingOff: (stats: BroadcastPerformanceStats | null) => boolean
     }
 }
