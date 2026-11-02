@@ -18275,6 +18275,7 @@ class TestSandboxCustomImageAPI(BaseTaskAPITest):
         task = Task.objects.get(id=data["builder_task_id"])
         self.assertEqual(task.repository, "posthog/hedgebox")
         self.assertEqual(task.origin_product, Task.OriginProduct.IMAGE_BUILDER)
+        self.assertEqual(task.profile, "image_builder")
         run = task.runs.order_by("-created_at").first()
         assert run is not None
         self.assertIn("/tmp/workspace/repos/posthog/hedgebox", run.state["pending_user_message"])
@@ -18746,6 +18747,7 @@ class TestTaskRunAnalyzeAPI(BaseTaskAPITest):
         self.assertTrue(body["created"])
         analysis_task = Task.objects.get(id=body["analysis_task_id"])
         self.assertEqual(analysis_task.origin_product, Task.OriginProduct.TASK_ANALYSIS)
+        self.assertEqual(analysis_task.profile, "task_analysis")
         self.assertTrue(analysis_task.internal)
         self.assertIn("analyzing-task-runs", analysis_task.description)
         run = analysis_task.latest_run
