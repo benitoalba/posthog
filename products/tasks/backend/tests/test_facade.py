@@ -2026,6 +2026,7 @@ class TestFacadeReadsAndMappers(TestCase):
 
         task = Task.objects.get(id=created if isinstance(created, UUID) else created.task_id)
         self.assertEqual(task.hog_flow_id, flow_id)
+        self.assertEqual((task.source_kind, task.source_id), ("hog_flow", str(flow_id)))
 
     @parameterized.expand(
         [
