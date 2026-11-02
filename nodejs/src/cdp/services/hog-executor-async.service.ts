@@ -1,10 +1,12 @@
 import { DateTime } from 'luxon'
 
+import { buildIntegerMatcher } from '~/common/config/matchers'
 import { instrumented } from '~/common/tracing/tracing-utils'
 import { parseJSON } from '~/common/utils/json-parse'
 import { logger } from '~/common/utils/logger'
 import { FetchOptions } from '~/common/utils/request'
 import { TeamManager } from '~/common/utils/team-manager'
+import { ValueMatcher } from '~/types'
 
 import { getAsyncFunctionHandler, getRegisteredAsyncFunctionNames } from '../async-function-registry'
 import '../async-functions'
@@ -30,7 +32,7 @@ import { mergeSecretHeaders, resolveSecretHeaders } from '../utils/secret-header
 import { resolveStandardWebhooksKey, signStandardWebhooksRequest } from '../utils/standard-webhooks'
 import { HogExecutorExecuteOptions, HogExecutorPreviousResult, HogExecutorService } from './hog-executor.service'
 import { HogInputsService } from './hog-inputs.service'
-import { EMAIL_QUEUE_PRIORITY, cdpEmailQueuedTotal, getEmailQueuePriorityClass } from './messaging/email-priority'
+import { EmailQueue, cdpEmailQueuedTotal, getEmailQueue, isEmailQueue } from './messaging/email-queues'
 import { EmailService } from './messaging/email.service'
 import { PushNotificationService } from './messaging/push-notification.service'
 import { RecipientTokensService, preferencesTokenSourceForInvocation } from './messaging/recipient-tokens.service'
@@ -43,6 +45,7 @@ import {
     selfLoopGuardCounter,
 } from './self-loop-guard'
 
+
 export interface HogExecutorAsyncConfig {
     googleAdwordsDeveloperToken: string
     fetchRetries: number
@@ -50,6 +53,8 @@ export interface HogExecutorAsyncConfig {
     fetchBackoffMaxMs: number
     siteUrl: string
     internalApiBaseUrl: string
+    /** Comma-separated team ids (or `*`) allowed on the transactional lane. */
+    transactionalEmailQueueTeams: string
 }
 
 /**
@@ -87,11 +92,15 @@ export type HogExecutorExecuteAsyncOptions = HogExecutorExecuteOptions & {
  * actually owns them.
  */
 export class HogExecutorAsyncService {
+    private transactionalEmailQueueTeams: ValueMatcher<number>
+
     constructor(
         public readonly hogExecutor: HogExecutorService,
         private config: HogExecutorAsyncConfig,
         private deps: HogExecutorAsyncDependencies
-    ) {}
+    ) {
+        this.transactionalEmailQueueTeams = buildIntegerMatcher(config.transactionalEmailQueueTeams, true)
+    }
 
     @instrumented('hog-executor.executeWithAsyncFunctions')
     async executeWithAsyncFunctions(
@@ -142,7 +151,7 @@ export class HogExecutorAsyncService {
                 // back to hogflow will be when overall execution time exceeds the
                 // budget, to avoid blocking the queue.
                 if (queueParamsType === 'fetch') {
-                    if (invocation.queue === 'email') {
+                    if (isEmailQueue(invocation.queue)) {
                         // Intermediate results clone away queueMetadata (createInvocationResult
                         // drops it unless the target queue is passed explicitly), so read the
                         // stash through the entry invocation too — it still carries the row's copy.
@@ -150,10 +159,7 @@ export class HogExecutorAsyncService {
                             nextInvocation,
                             nextInvocation.queueMetadata?.originQueue ??
                                 invocation.queueMetadata?.originQueue ??
-                                'hogflow',
-                            nextInvocation.queueMetadata?.originPriority ??
-                                invocation.queueMetadata?.originPriority ??
-                                invocation.queuePriority
+                                'hogflow'
                         )
                     } else {
                         result = await this.executeFetch(nextInvocation, options)
@@ -166,21 +172,14 @@ export class HogExecutorAsyncService {
                 } else if (queueParamsType === 'email') {
                     // Route to the email queue unless this is a test run: tests execute in-process and
                     // never enqueue, so routing would leave the job unworked.
-                    const routeToEmailQueue = invocation.queue !== 'email' && !options?.isTest
+                    const routeToEmailQueue = !isEmailQueue(invocation.queue) && !options?.isTest
                     if (routeToEmailQueue) {
-                        // Stash the entry invocation's priority as the origin, not nextInvocation's:
-                        // an earlier execute()/executeFetch() in this loop cloned the invocation and
-                        // reset its queuePriority to 0, so reading nextInvocation here would restore 0
-                        // on return and jump the run to the front of the origin queue.
-                        result = this.routeEmailToQueue(nextInvocation, invocation.queuePriority)
+                        result = this.routeEmailToQueue(nextInvocation)
                     } else {
-                        // A flow already on the email queue sends inline, so this send never went
-                        // through routeEmailToQueue's classification. Refresh the priority from
-                        // the current action's metadata so a throttle retry re-queues under this
-                        // send's class rather than the previous email action's.
-                        if (invocation.queue === 'email') {
-                            nextInvocation.queuePriority =
-                                EMAIL_QUEUE_PRIORITY[getEmailQueuePriorityClass(nextInvocation.hogFunction.metadata)]
+                        // Re-pick the lane from this action's metadata so a throttle retry
+                        // re-queues under this send's class, not the previous email action's.
+                        if (isEmailQueue(invocation.queue)) {
+                            nextInvocation.queue = this.pickEmailQueue(nextInvocation)
                         }
                         // isTest is forwarded so a test send stays out of the email's engagement tracking.
                         result = await this.deps.emailService.executeSendEmail(nextInvocation, options?.isTest ?? false)
@@ -281,30 +280,27 @@ export class HogExecutorAsyncService {
         )
     }
 
+    private pickEmailQueue(invocation: CyclotronJobInvocationHogFunction): EmailQueue {
+        return getEmailQueue(invocation.hogFunction.metadata, invocation.teamId, this.transactionalEmailQueueTeams)
+    }
+
     /**
-     * Routes an email send to the dedicated email queue instead of sending inline.
-     * The email worker will pick this up, send via SES, and return the job to the
-     * original queue so the workflow can continue.
+     * Routes an email send to its email lane instead of sending inline. The lane's
+     * worker will pick this up, send via SES, and return the job to the original
+     * queue so the workflow can continue.
      */
     private routeEmailToQueue(
-        invocation: CyclotronJobInvocationHogFunction,
-        originPriority: number
+        invocation: CyclotronJobInvocationHogFunction
     ): CyclotronJobInvocationResult<CyclotronJobInvocationHogFunction> {
-        const priorityClass = getEmailQueuePriorityClass(invocation.hogFunction.metadata)
+        const queue = this.pickEmailQueue(invocation)
         const result = createInvocationResult<CyclotronJobInvocationHogFunction>(
             invocation,
             {
-                queue: 'email',
-                // The email queue dequeues transactional-class sends ahead of bulk ones;
-                // originPriority is stashed so routeToQueue can restore the pre-email
-                // priority when the job returns to its origin queue, keeping the email
-                // classes out of the hogflow queue's ordering.
-                queuePriority: EMAIL_QUEUE_PRIORITY[priorityClass],
+                queue,
                 queueParameters: invocation.queueParameters,
                 queueMetadata: {
                     ...invocation.queueMetadata,
                     originQueue: invocation.queue,
-                    originPriority,
                 },
             },
             { finished: false }
@@ -319,23 +315,19 @@ export class HogExecutorAsyncService {
             count: 1,
         })
 
-        cdpEmailQueuedTotal.labels(priorityClass).inc()
+        cdpEmailQueuedTotal.labels(queue).inc()
 
         return result
     }
 
     private routeToQueue(
         invocation: CyclotronJobInvocationHogFunction,
-        targetQueue: string,
-        originPriority: number
+        targetQueue: string
     ): CyclotronJobInvocationResult<CyclotronJobInvocationHogFunction> {
         return createInvocationResult<CyclotronJobInvocationHogFunction>(
             invocation,
             {
                 queue: targetQueue as CyclotronJobInvocationHogFunction['queue'],
-                // Restore the priority the job had before routeEmailToQueue reclassified
-                // it, so an email-class value never orders jobs on the origin queue.
-                queuePriority: originPriority,
                 queueParameters: invocation.queueParameters,
                 queueMetadata: undefined,
             },

@@ -112,6 +112,7 @@ describe('Hogflow Executor', () => {
                 fetchBackoffMaxMs: hub.CDP_FETCH_BACKOFF_MAX_MS,
                 siteUrl: hub.SITE_URL,
                 internalApiBaseUrl: hub.INTERNAL_API_BASE_URL,
+                transactionalEmailQueueTeams: hub.CDP_EMAIL_TRANSACTIONAL_QUEUE_TEAMS,
             },
             {
                 teamManager: hub.teamManager,
@@ -3396,19 +3397,17 @@ describe('Hogflow Executor', () => {
                 },
             })
 
-            // A watcher-degraded flow enters at priority 2; the routing must stash that
-            // exact value, not the 0 that per-action result clones reset queuePriority to
-            // before the email action runs (the trigger action executes first here).
+            // A watcher-degraded flow enters at priority 2. Routing to the email lane must
+            // carry that through, not the 0 that per-action result clones reset
+            // queuePriority to before the email action runs (the trigger action runs first).
             invocation.queuePriority = 2
 
-            // Step 1: Hogflow worker executes (queue !== 'email') — should route to email queue
+            // Step 1: Hogflow worker executes (not on an email lane) — should route to the email lane
             const hogflowResult = await executor.execute(invocation)
             expect(hogflowResult.finished).toBe(false)
             expect(hogflowResult.invocation.queue).toBe('email')
             expect(hogflowResult.invocation.queueParameters?.type).toBe('email')
-            // Uncategorized sends classify as bulk (priority 1).
-            expect(hogflowResult.invocation.queuePriority).toBe(1)
-            expect(hogflowResult.invocation.queueMetadata?.originPriority).toBe(2)
+            expect(hogflowResult.invocation.queuePriority).toBe(2)
 
             // Step 2: Email worker picks up the job (queue === 'email') — should send inline and continue
             let emailResult = await executor.execute(hogflowResult.invocation)

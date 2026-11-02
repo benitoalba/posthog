@@ -178,6 +178,7 @@ export type CdpCoreServicesConfig = Pick<
         | 'EMAIL_TEAM_SENDING_CAP_HOURLY_BY_TIER'
         | 'EMAIL_TEAM_SENDING_CAP_DAILY_BY_TIER'
         | 'CDP_GOOGLE_ADWORDS_DEVELOPER_TOKEN'
+        | 'CDP_EMAIL_TRANSACTIONAL_QUEUE_TEAMS'
         | 'CONVERSATIONS_TICKETS_JWT_SECRET'
         | 'CUSTOMER_ANALYTICS_ACCOUNTS_JWT_SECRET'
         | 'CDP_FETCH_RETRIES'
@@ -514,6 +515,7 @@ export function createCdpCoreServices(
             fetchBackoffMaxMs: config.CDP_FETCH_BACKOFF_MAX_MS,
             siteUrl: config.SITE_URL,
             internalApiBaseUrl: config.INTERNAL_API_BASE_URL,
+            transactionalEmailQueueTeams: config.CDP_EMAIL_TRANSACTIONAL_QUEUE_TEAMS,
         },
         {
             teamManager: deps.teamManager,

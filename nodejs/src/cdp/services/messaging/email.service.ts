@@ -21,7 +21,7 @@ import { IntegrationManagerService } from '../managers/integration-manager.servi
 import { RecipientManagerRecipient, RecipientsManagerService } from '../managers/recipients-manager.service'
 import { TeamWorkflowsConfigService } from '../managers/team-workflows-config.service'
 import { RateLimiterService } from '../rate-limiter/rate-limiter.service'
-import { getEmailQueuePriorityClass } from './email-priority'
+import { emailPriorityClassLabel } from './email-queues'
 import { selectEmailSenderIntegrationId } from './email-sender-selection'
 import { EmailStatusService, isTransactionalEmailSend } from './email-status.service'
 import { EmailSuppressionService, SuppressionCheckOptions } from './email-suppression.service'
@@ -1293,7 +1293,7 @@ export class EmailService {
             emailQueueToSendMs
                 .labels({
                     source: queueWait.source,
-                    priority_class: getEmailQueuePriorityClass(result.invocation.hogFunction.metadata),
+                    priority_class: emailPriorityClassLabel(result.invocation.hogFunction.metadata),
                     team_capped: queueWait.teamCapped ? 'true' : 'false',
                 })
                 .observe(Math.max(0, Date.now() - queueWait.startedAt.toMillis()))
