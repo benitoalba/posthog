@@ -70,7 +70,6 @@ describe('broadcastPerformanceLogic', () => {
     it.each(['email', 'push'] as const)(
         'counts %s sends that stopped at an error before reaching the provider',
         async (channel) => {
-            // Rows only for metrics the query asks for, so dropping a metric from it fails the test.
             const rows: [number, string][] = [
                 [0, 'email_sent'],
                 [0, 'push_sent'],
@@ -90,7 +89,8 @@ describe('broadcastPerformanceLogic', () => {
             logic.mount()
 
             await expectLogic(logic).toDispatchActions(['loadTotalsSuccess'])
-            expect(logic.values.stats).toMatchObject({ sent: 0, failed: 0, errored: 245 })
+            expect(logic.values.stats).toMatchObject({ sent: 0, failed: 0 })
+            expect(logic.values.errored).toEqual(245)
         }
     )
 

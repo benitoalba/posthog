@@ -6,28 +6,18 @@ import { dayjs } from 'lib/dayjs'
 import { humanFriendlyNumber } from 'lib/utils/numbers'
 import { logsViewerLogic } from 'scenes/hog-functions/logs/logsViewerLogic'
 
-import type { BroadcastChannel } from './broadcastsLogic'
+import { BroadcastPerformanceLogicProps, broadcastPerformanceLogic } from './broadcastPerformanceLogic'
 
-/**
- * Sends that stopped at an error, such as a template that can't render, never reach the provider, so
- * they show up in no send count. The reason exists only in the run's logs, which this reads.
- */
-export function BroadcastRunErrors({
+function RunErrorsBanner({
     runId,
     runStartedAt,
+    channel,
     count,
-    channel = 'email',
-}: {
-    runId: string
-    runStartedAt: string
-    count: number
-    channel?: BroadcastChannel
-}): JSX.Element {
+}: BroadcastPerformanceLogicProps & { count: number }): JSX.Element {
     const { unGroupedLogs } = useValues(
         logsViewerLogic({
             logicKey: `broadcast-run-errors-${runId}`,
             sourceType: 'hog_flow',
-            // A batch send logs against the run, not the flow.
             sourceId: runId,
             groupByInstanceId: false,
             disableUrlSync: true,
@@ -56,4 +46,9 @@ export function BroadcastRunErrors({
             </LemonBanner>
         </div>
     )
+}
+
+export function BroadcastRunErrors(props: BroadcastPerformanceLogicProps): JSX.Element | null {
+    const { errored } = useValues(broadcastPerformanceLogic(props))
+    return errored > 0 ? <RunErrorsBanner {...props} count={errored} /> : null
 }

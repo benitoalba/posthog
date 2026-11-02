@@ -92,14 +92,7 @@ export function BroadcastPushPerformance({
                     <Stat label="Converted" value={stats.converted} detail={ofSent(stats.converted, stats.sent)} />
                 ) : null}
             </div>
-            {stats.errored > 0 ? (
-                <BroadcastRunErrors
-                    runId={props.runId}
-                    runStartedAt={props.runStartedAt}
-                    count={stats.errored}
-                    channel="push"
-                />
-            ) : null}
+            <BroadcastRunErrors {...props} />
             <span className="text-xs text-muted">
                 Counts are notifications, one for each app a person is sent through. Opens are counted when your app
                 reports a tapped notification. Your app registers each phone for push,{' '}

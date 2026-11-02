@@ -74,9 +74,7 @@ export function BroadcastPerformance({
                 ))}
             </div>
 
-            {stats.errored > 0 ? (
-                <BroadcastRunErrors runId={props.runId} runStartedAt={props.runStartedAt} count={stats.errored} />
-            ) : null}
+            <BroadcastRunErrors {...props} />
 
             {trackingOff ? (
                 <LemonBanner type="info">
