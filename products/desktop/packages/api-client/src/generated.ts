@@ -4044,6 +4044,31 @@ export namespace Schemas {
         uuid?: (string | null) | undefined;
         version?: (number | null) | undefined;
     };
+    export type ExperimentQuantileMetric = {
+        breakdownFilter?: (BreakdownFilter | null) | undefined;
+        conversion_window?: (number | null) | undefined;
+        conversion_window_unit?:
+            | (FunnelConversionWindowTimeUnit | null)
+            | undefined;
+        fingerprint?: (string | null) | undefined;
+        goal?: (ExperimentMetricGoal | null) | undefined;
+        isSharedMetric?: (boolean | null) | undefined;
+        kind?: string | undefined;
+        metric_type?: string | undefined;
+        name?: (string | null) | undefined;
+        /**
+         * Quantile level, for example 0.9 for p90.
+         */
+        quantile: number;
+        response?: (Record<string, unknown> | null) | undefined;
+        sharedMetricId?: (number | null) | undefined;
+        /**
+         * Must set `math_property`, the numeric property to take the quantile of. `math` is ignored.
+         */
+        source: EventsNode | ActionsNode;
+        uuid?: (string | null) | undefined;
+        version?: (number | null) | undefined;
+    };
     export type PrecomputationMode = "precomputed" | "direct";
     export type SessionData = {
         event_uuid: string;
@@ -4064,6 +4089,7 @@ export namespace Schemas {
         key: string;
         number_of_samples: number;
         numerator_denominator_sum_product?: (number | null) | undefined;
+        quantile_grid?: (Array<number> | null) | undefined;
         step_counts?: (Array<number> | null) | undefined;
         step_sessions?: (Array<Array<SessionData>> | null) | undefined;
         sum: number;
@@ -4084,6 +4110,7 @@ export namespace Schemas {
         number_of_samples: number;
         numerator_denominator_sum_product?: (number | null) | undefined;
         p_value?: (number | null) | undefined;
+        quantile_grid?: (Array<number> | null) | undefined;
         significant?: (boolean | null) | undefined;
         step_counts?: (Array<number> | null) | undefined;
         step_sessions?: (Array<Array<SessionData>> | null) | undefined;
@@ -4105,6 +4132,7 @@ export namespace Schemas {
         method?: string | undefined;
         number_of_samples: number;
         numerator_denominator_sum_product?: (number | null) | undefined;
+        quantile_grid?: (Array<number> | null) | undefined;
         significant?: (boolean | null) | undefined;
         step_counts?: (Array<number> | null) | undefined;
         step_sessions?: (Array<Array<SessionData>> | null) | undefined;
@@ -4150,7 +4178,8 @@ export namespace Schemas {
             | ExperimentMeanMetric
             | ExperimentFunnelMetric
             | ExperimentRatioMetric
-            | ExperimentRetentionMetric;
+            | ExperimentRetentionMetric
+            | ExperimentQuantileMetric;
         modifiers?: (HogQLQueryModifiers | null) | undefined;
         name?: (string | null) | undefined;
         precomputation_mode?: (PrecomputationMode | null) | undefined;
@@ -9801,7 +9830,8 @@ export namespace Schemas {
         | ExperimentMeanMetric
         | ExperimentFunnelMetric
         | ExperimentRatioMetric
-        | ExperimentRetentionMetric;
+        | ExperimentRetentionMetric
+        | ExperimentQuantileMetric;
     /**
      * A shared metric's link to one experiment, as the experiment API returns it.
      */
@@ -9915,7 +9945,8 @@ export namespace Schemas {
         | "funnel"
         | "mean"
         | "ratio"
-        | "retention";
+        | "retention"
+        | "quantile";
     export type Kind3 = "EventsNode" | "ActionsNode" | "ExperimentExposureNode";
     export type ExperimentApiRetentionStart = {
         event?: (string | null) | undefined;
@@ -9956,6 +9987,7 @@ export namespace Schemas {
         numerator_outlier_handling?:
             | (ExperimentMetricOutlierHandling | null)
             | undefined;
+        quantile?: (number | null) | undefined;
         retention_window_end?: (number | null) | undefined;
         retention_window_start?: (number | null) | undefined;
         retention_window_unit?:
