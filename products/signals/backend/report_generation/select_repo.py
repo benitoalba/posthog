@@ -27,6 +27,7 @@ from products.tasks.backend.facade.repo_selection import (
     RepoSelectionRejectedError,
     RepoSelectionResult,
     RepoSelectionUnavailableError,
+    research_repository_candidates,
     resolve_team_github_integration,
     select_repository,
 )
@@ -67,6 +68,12 @@ def persisted_repo_selection(report_id: str) -> RepoSelectionResult | None:
     return RepoSelectionResult.model_validate_json(artefact.content)
 
 
+def repository_candidates_for_signals(team_id: int, signals: list[SignalData]) -> list[str]:
+    sources: set[str | None] = {source for signal in signals if (source := source_repository_from_signals([signal]))}
+    candidate_sets = [set(research_repository_candidates(team_id, source)) for source in sources or {None}]
+    return sorted(set.intersection(*candidate_sets))
+
+
 async def select_repository_for_team(
     team_id: int,
     user_id: int,
@@ -79,6 +86,7 @@ async def select_repository_for_team(
     verbose: bool = False,
     output_fn: OutputFn = None,
     source_repository: str | None = None,
+    team_only: bool = False,
 ) -> RepoSelectionResult:
     """Select the most relevant repository for a free-form request against the team's repos.
 
@@ -99,10 +107,18 @@ async def select_repository_for_team(
     # custom agents, scout emit) sees the project's past wrong-repo corrections, rather than per
     # caller. Best-effort inside (None on failure or no corrections).
     past_corrections = await database_sync_to_async(wrong_repo_corrections_block, thread_sensitive=False)(team_id)
+    github = None
+    if team_only:
+        github = await database_sync_to_async(resolve_team_github_integration, thread_sensitive=False)(
+            team_id, team_only=True
+        )
+        if github is None:
+            return RepoSelectionResult(repository=None, reason="No project-connected GitHub repository is available.")
     try:
         return await select_repository(
             team_id=team_id,
             user_id=user_id,
+            github=github,
             context=request_section,
             origin_product=tasks_facade.TaskOriginProduct.SIGNAL_REPORT,
             # Report generation runs in the background, so its repository cache refresh yields first.
@@ -150,6 +166,7 @@ async def select_repository_for_report(
     sandbox_environment_id: str | None = None,
     verbose: bool = False,
     output_fn: OutputFn = None,
+    team_only: bool = False,
 ) -> RepoSelectionResult:
     """Select the most relevant repository for a set of signals.
 
@@ -171,4 +188,5 @@ async def select_repository_for_report(
         verbose=verbose,
         output_fn=output_fn,
         source_repository=source_repository_from_signals(signals),
+        team_only=team_only,
     )

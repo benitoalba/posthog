@@ -14,6 +14,7 @@ from products.tasks.backend.logic.repo_selection import (
     RepoSelectionUnavailableError,
     RepoSelectionUsageLimitError,
     list_team_connected_repositories,
+    research_repository_candidates,
     resolve_team_github_integration,
     select_repository,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "RepoSelectionUnavailableError",
     "RepoSelectionUsageLimitError",
     "get_github_token",
+    "research_repository_candidates",
     "list_team_connected_repositories",
     "repository_accessible_via_integration",
     "resolve_team_github_integration",

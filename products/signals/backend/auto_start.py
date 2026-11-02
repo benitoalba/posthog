@@ -134,6 +134,13 @@ class AutostartOutcome:
 
 
 @frozen
+class ImplementationResume:
+    task_id: str
+    user_id: int
+    repository: str
+
+
+@frozen
 class RequestedImplementation:
     team_id: int
     report_id: str
@@ -1048,6 +1055,9 @@ def start_requested_implementation(
     if repo_selection is None or repo_selection.repository is None or not report.title or not report.summary:
         raise RequestedImplementationUnavailable("The completed research has no implementation repository or summary")
 
+    if repo_selection.requires_confirmation:
+        raise RequestedImplementationUnavailable("Confirm the recommended repository before implementation")
+
     linked_tasks = {
         entry.task_id
         for entry in SignalReport.associated_task_runs(
@@ -1350,9 +1360,11 @@ async def maybe_autostart_implementation_task(
     triggering_user_id: int | None = None,
     billing_exempt_reason: str | None = None,
     repository_autostart_eligible: bool = True,
+    repository_confirmation_required: bool = False,
     implementation_decision: ImplementationDecision | None = None,
     remaining_retries: int = 2,
     dispatch: ImplementationDispatch | None = None,
+    resume: ImplementationResume | None = None,
     ch_user: ClickHouseUser = ClickHouseUser.DEFAULT,
 ) -> AutostartOutcome:
     """Start an implementation Task for a SignalReport if autonomy + priority allow it.
@@ -1402,6 +1414,8 @@ async def maybe_autostart_implementation_task(
     their report and artefacts. Callers should wrap this in try/except so an
     autostart failure does not fail the report itself.
     """
+    if repository_confirmation_required:
+        return AutostartOutcome(status="blocked", reason="Confirm the recommended repository before implementation")
     if not await database_sync_to_async(assignment_side_effects_allowed)(team_id=team_id, report_id=report_id):
         return AutostartOutcome(status="cancelled", reason="Assignment side effects are disabled")
 
@@ -1416,6 +1430,18 @@ async def maybe_autostart_implementation_task(
     if report is None:
         logger.info("self-driving auto-start skipped", report_id=report_id, team_id=team_id, reason="report gone")
         return AutostartOutcome(status="cancelled", reason="Report no longer exists")
+    if resume is not None and (
+        report.status != SignalReport.Status.READY
+        or report.run_count != (report.implemented_at_run_count or 0)
+        or (report.content_revision_count or 0) != (report.implemented_at_revision_count or 0)
+        or not await SignalReport.objects.filter(
+            id=report_id,
+            team_id=team_id,
+            report_tasks__task_id=resume.task_id,
+            report_tasks__relationship="implementation",
+        ).aexists()
+    ):
+        return AutostartOutcome(status="cancelled", reason="The report or implementation has changed")
     assignment = await database_sync_to_async(ReviewerRules.read_for_report)(team_id=team_id, report_id=report_id)
     if (
         assignment.state.corrections_id is None
@@ -1450,6 +1476,7 @@ async def maybe_autostart_implementation_task(
                 team_id=team_id,
                 report_id=report_id,
                 remaining_retries=remaining_retries - 1,
+                resume=resume,
                 implementation_spend_kind=implementation_spend_kind,
                 dispatch=dispatch,
                 ch_user=ch_user,
@@ -1464,7 +1491,7 @@ async def maybe_autostart_implementation_task(
 
     skip_reason: str | None = None
     skip_code: str | None = None
-    if task_exists and not supersede.allowed:
+    if task_exists and resume is None and not supersede.allowed:
         skip_reason = "implementation task already exists"
     elif actionability.actionability != ActionabilityChoice.IMMEDIATELY_ACTIONABLE:
         skip_reason = f"not immediately actionable: {actionability.actionability.value}"
@@ -1625,6 +1652,16 @@ async def maybe_autostart_implementation_task(
         )
         return AutostartOutcome(status="blocked", reason="Organization is on a free trial")
 
+    if resume is not None:
+        if (
+            not team.organization.is_ai_data_processing_approved
+            or not task_user.is_active
+            or task_user.id != resume.user_id
+            or repository.casefold() != resume.repository.casefold()
+        ):
+            return AutostartOutcome(status="cancelled", reason="The implementation runner or target has changed")
+        return AutostartOutcome(status="queued")
+
     base_branch = team_config.base_branch_for(repository) if team_config else None
     stack_base_branch = await database_sync_to_async(dependency_head_branch, thread_sensitive=False)(
         team_id=team_id, report_id=report_id, repository=repository
@@ -1678,6 +1715,7 @@ async def maybe_autostart_implementation_task(
                 team_id=team_id,
                 report_id=report_id,
                 remaining_retries=remaining_retries - 1,
+                resume=resume,
                 implementation_spend_kind=implementation_spend_kind,
                 dispatch=dispatch,
                 ch_user=ch_user,
@@ -1746,6 +1784,7 @@ async def maybe_autostart_from_report_artefacts(
     implementation_spend_kind: str = "reviewer_triggered_implementation",
     remaining_retries: int = 2,
     dispatch: ImplementationDispatch | None = None,
+    resume: ImplementationResume | None = None,
     ch_user: ClickHouseUser = ClickHouseUser.DEFAULT,
 ) -> AutostartOutcome:
     """Re-evaluate auto-start from a report's *current* artefacts.
@@ -1770,7 +1809,7 @@ async def maybe_autostart_from_report_artefacts(
             reason="report from background scout",
         )
         return AutostartOutcome(status="blocked", reason="Reports from background scouts do not auto-start")
-    if dispatch is None:
+    if dispatch is None and resume is None:
         from products.signals.backend.implementation_dispatch import (
             ImplementationDispatcher,  # noqa: PLC0415 - breaks the dispatcher/autostart cycle
         )
@@ -1847,8 +1886,10 @@ async def maybe_autostart_from_report_artefacts(
         # which would let one user act under another's PostHog identity (reviewer impersonation).
         triggering_user_id=editor_user_id,
         repository_autostart_eligible=repo_selection.autostart_eligible,
+        repository_confirmation_required=repo_selection.requires_confirmation,
         implementation_decision=implementation_decision,
         remaining_retries=remaining_retries,
+        resume=resume,
         dispatch=dispatch,
         ch_user=ch_user,
     )

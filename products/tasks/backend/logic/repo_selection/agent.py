@@ -332,6 +332,16 @@ def _filter_candidates_by_source_visibility(
     return [repo for repo in candidate_repos if repo == source_repository or visibility.get(repo) is True]
 
 
+def research_repository_candidates(team_id: int, source_repository: str | None = None) -> list[str]:
+    github = resolve_team_github_integration(team_id, team_only=True)
+    if github is None:
+        return []
+    candidates = _list_candidate_repos(github, team_id, allow_refresh=False, exclude_archived=True)
+    source = (source_repository or "").strip().lower() or None
+    visibility = _candidate_visibility(github, [*candidates, source] if source else candidates)
+    return _filter_candidates_by_source_visibility(source, candidates, visibility)
+
+
 def _build_repo_selection_prompt(
     context_block: str,
     candidate_repos: list[str],
@@ -372,6 +382,8 @@ def _build_repo_selection_prompt(
     # not the model's. Offering it would let untrusted context talk the model into vetoing autostart.
     schema.get("properties", {}).pop("autostart_eligible", None)
     schema.get("properties", {}).pop("research_context", None)
+    schema.get("properties", {}).pop("blocked_reason", None)
+    schema.get("properties", {}).pop("confirmation_required", None)
     schema.get("$defs", {}).pop("ReportResearchContext", None)
     schema_json = json.dumps(schema, indent=2)
     visibility = visibility or {}
