@@ -165,5 +165,5 @@ Bars use `hitArea: 'band'`.
 
 ## Metric helpers
 
-The metric tile is `Metric` in `@posthog/quill-components/metric` (it needs `Card` and `Badge` from primitives, which charts cannot depend on).
+The metric tile is `Metric` in `@posthog/quill-components/metric`, published as `@posthog/quill/metric` (it needs `Card` and `Badge` from primitives, which charts cannot depend on).
 It is built on `Sparkline` plus the headless helpers this package exports: `resolveDelta` and `computeFallbackChangePercent` (delta math), `useAnimatedNumber` (count-up headline), `useHoverIntent` (hover dwell), and the `MetricChange`, `ResolvedDelta`, and `ChangeColor` types.

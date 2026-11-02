@@ -103,7 +103,7 @@ Headless month-grid state for building custom calendar UIs: returns `calendar` (
 
 ## Metric
 
-A composable stat tile: a headline number, a `Badge` change pill, and an optional `Sparkline`. `Metric` is **content, not a surface** — wrap it in `<Card flush>` for the border. It's the one component here that depends on `@posthog/quill-charts` (for `Sparkline` + the headless metric math), which pulls d3 — so it lives behind its own `@posthog/quill-components/metric` entry point, **not** the main barrel (and not the `@posthog/quill` umbrella). That keeps charts/d3 out of the always-eager app-shell graph: only code that imports the metric subpath pays for it.
+A composable stat tile: a headline number, a `Badge` change pill, and an optional `Sparkline`. `Metric` is **content, not a surface** — wrap it in `<Card flush>` for the border. It's the one component here that depends on `@posthog/quill-charts` (for `Sparkline` + the headless metric math), which pulls d3 — so it lives behind its own `@posthog/quill-components/metric` entry point, **not** the main barrel. The published package re-exports it as `@posthog/quill/metric`, not from its main entry. That keeps charts/d3 out of the always-eager app-shell graph: only code that imports the metric subpath pays for it.
 
 ```tsx
 import {
