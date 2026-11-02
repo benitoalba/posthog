@@ -1,6 +1,14 @@
 import { useValues } from 'kea'
 
-import { Metric, MetricSparkline, MetricSubtitle, MetricTitle, MetricValue } from '@posthog/quill-components/metric'
+import {
+    Metric,
+    MetricDelta,
+    MetricHeader,
+    MetricSparkline,
+    MetricSubtitle,
+    MetricTitle,
+    MetricValue,
+} from '@posthog/quill-components/metric'
 
 import { useChartTheme } from 'lib/charts/hooks'
 import { getColorVar } from 'lib/colors'
@@ -64,10 +72,10 @@ export function StatPanel({ series, display, fallbackName }: MetricsPanelProps):
                 className="@container w-full min-w-0 px-0"
             >
                 {!single && <MetricTitle>{name}</MetricTitle>}
-                <MetricValue
-                    className={cn('text-2xl @min-[13rem]:text-3xl @min-[16rem]:text-4xl', !single && 'mt-2')}
-                    style={{ color }}
-                />
+                <MetricHeader className={cn('flex-wrap items-center', !single && 'mt-2')}>
+                    <MetricValue className="text-2xl @min-[13rem]:text-3xl @min-[16rem]:text-4xl" style={{ color }} />
+                    <MetricDelta />
+                </MetricHeader>
                 <MetricSubtitle className="mt-1" />
                 <MetricSparkline className="mt-2" />
             </Metric>
