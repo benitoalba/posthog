@@ -4,10 +4,19 @@ import { LemonButton, LemonDialog, LemonInput, LemonLabel, LemonModal } from '@p
 
 import { ExperimentMetricForm } from 'scenes/experiments/ExperimentMetricForm'
 import { exposureCriteriaModalLogic } from 'scenes/experiments/ExperimentView/exposureCriteriaModalLogic'
+import {
+    PERCENTILE_METRIC_SEQUENTIAL_DISABLED_REASON,
+    experimentUsesSequentialTesting,
+} from 'scenes/experiments/ExperimentView/sequential'
 import { resolveFilterTestAccounts, resolvedExposureEvent } from 'scenes/experiments/exposureContract'
 import { getMetricIncompleteReason } from 'scenes/experiments/utils'
+import { experimentsConfigLogic } from 'scenes/settings/environment/experimentsConfigLogic'
 
-import type { ExperimentExposureCriteria, ExperimentMetric } from '~/queries/schema/schema-general'
+import {
+    type ExperimentExposureCriteria,
+    type ExperimentMetric,
+    isExperimentQuantileMetric,
+} from '~/queries/schema/schema-general'
 import type { Experiment } from '~/types'
 
 import { type MetricContext, experimentMetricModalLogic } from './experimentMetricModalLogic'
@@ -26,10 +35,21 @@ export function ExperimentMetricModal({
     const { isModalOpen, metric, context, isCreateMode, isEditMode } = useValues(experimentMetricModalLogic)
     const { closeExperimentMetricModal, setMetric: setModalMetric } = useActions(experimentMetricModalLogic)
     const { openExposureCriteriaModal } = useActions(exposureCriteriaModalLogic)
+    const { experimentsConfig } = useValues(experimentsConfigLogic)
 
     if (!isModalOpen || !metric) {
         return null
     }
+
+    const saveDisabledReason =
+        getMetricIncompleteReason(metric) ??
+        (isExperimentQuantileMetric(metric) &&
+        experimentUsesSequentialTesting(
+            experiment.stats_config,
+            experimentsConfig?.default_sequential_testing_enabled ?? false
+        )
+            ? PERCENTILE_METRIC_SEQUENTIAL_DISABLED_REASON
+            : undefined)
 
     return (
         <LemonModal
@@ -74,7 +94,7 @@ export function ExperimentMetricModal({
                         <LemonButton
                             form="edit-experiment-metric-form"
                             onClick={() => onSave(metric, context)}
-                            disabledReason={getMetricIncompleteReason(metric)}
+                            disabledReason={saveDisabledReason}
                             type="primary"
                             data-attr="save-experiment-metric"
                         >
