@@ -164,6 +164,9 @@ class PullRequest(ProductTeamModel):
     # fan out an older snapshot after a newer one; this field is the monotonic clock that lets the task
     # drop a strictly-older delivery instead of superseding the current run with a stale review.
     payload_updated_at = models.DateTimeField(null=True)
+    # Set when someone other than the admitted bot pushed to the bot's PR. People review the PR from
+    # then on, even after the bot pushes again, because a later push need not undo the other one.
+    bot_admission_revoked_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

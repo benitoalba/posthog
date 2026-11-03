@@ -340,6 +340,7 @@ export interface StamphogSyncInstallationResponseApi {
 
 /**
  * * `self_driving` - SELF_DRIVING
+ * * `bot_author` - BOT_AUTHOR
  * * `manual` - MANUAL
  * * `label` - LABEL
  * * `all` - ALL
@@ -348,6 +349,7 @@ export type ReviewRunTriggerEnumApi = (typeof ReviewRunTriggerEnumApi)[keyof typ
 
 export const ReviewRunTriggerEnumApi = {
     SelfDriving: 'self_driving',
+    BotAuthor: 'bot_author',
     Manual: 'manual',
     Label: 'label',
     All: 'all',
@@ -472,6 +474,7 @@ export interface ReviewRunApi {
     /** What caused this run to exist: self-driving inbox provenance, a manual request through the API, the repo's trigger label, or the repo reviewing every PR event.
      *
      * * `self_driving` - SELF_DRIVING
+     * * `bot_author` - BOT_AUTHOR
      * * `manual` - MANUAL
      * * `label` - LABEL
      * * `all` - ALL */
@@ -650,6 +653,7 @@ export type StamphogReviewRunsListTrigger =
 
 export const StamphogReviewRunsListTrigger = {
     All: 'all',
+    BotAuthor: 'bot_author',
     Label: 'label',
     Manual: 'manual',
     SelfDriving: 'self_driving',

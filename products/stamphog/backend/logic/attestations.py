@@ -17,13 +17,13 @@ GitHub fills it at read time from the PR's current state.
 import re
 import json
 
-import yaml
 import structlog
 
 from posthog.dataclasses import frozen
 
 from ..facade.contracts import StamphogGitHubError
 from .github_client import StamphogGitHubClient
+from .repo_policy import policy_list
 
 logger = structlog.get_logger(__name__)
 
@@ -39,28 +39,11 @@ class ActionsAttestation:
 
 
 def actions_attestations(policy_text: str | None) -> list[ActionsAttestation]:
-    """The Actions attestations a repository's default-branch policy declares.
-
-    The engine validates the whole policy and fails the review on a malformed one, so an entry
-    this cannot read is skipped here rather than reported twice.
-    """
-    try:
-        raw = yaml.safe_load(policy_text or "")
-    except yaml.YAMLError:
-        return []
-    if not isinstance(raw, dict):
-        return []
-    entries = [
-        entry
-        for key in ("attestations", "extend_attestations")
-        if isinstance(listed := raw.get(key), list)
-        for entry in listed
-    ]
+    """The Actions attestations a repository's default-branch policy declares."""
     return [
         ActionsAttestation(name=entry["name"], workflow=entry["actions_workflow"], job=entry["job"])
-        for entry in entries
-        if isinstance(entry, dict)
-        and all(isinstance(entry.get(key), str) for key in ("name", "actions_workflow", "job"))
+        for entry in policy_list(policy_text, "attestations")
+        if all(isinstance(entry.get(key), str) for key in ("name", "actions_workflow", "job"))
     ]
 
 

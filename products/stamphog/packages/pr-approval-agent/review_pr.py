@@ -29,7 +29,7 @@ import uuid
 import argparse
 import tempfile
 import subprocess
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,7 +73,7 @@ from github import (
     write_pr_diff,
 )
 from manifest_risk import manifest_script_changes, manifest_script_changes_from_contents
-from policy import Attestation, EffectivePolicy, ScopeBudget, _sanitize_untrusted, repo_root, resolve
+from policy import Attestation, BotAuthor, EffectivePolicy, ScopeBudget, _sanitize_untrusted, repo_root, resolve
 from verdict_rule import facts_summary
 from version import STAMPHOG_VERSION
 
@@ -220,6 +220,7 @@ class Pipeline:
         dry_run: bool = False,
         verbose: bool = False,
         self_driving: bool = False,
+        bot_author_review: bool = False,
         review_trigger: str = "",
         head_checkout: bool = False,
         checkout: bool = True,
@@ -232,6 +233,9 @@ class Pipeline:
         # implementation run. It relaxes two gates (bot author, draft) and swaps author trust for
         # task provenance.
         self.self_driving = self_driving
+        # Set only by the hosted runtime, for a PR it admitted under a policy `bot_authors` entry. It
+        # relaxes the bot-author refusal on condition that CI attests every changed file.
+        self.bot_author_review = bot_author_review
         # Why the hosted runtime is reviewing this PR: "label", "all" or "self_driving". Descriptive
         # only. It reaches the prompt as one line and gates nothing, unlike self_driving above.
         # Empty for a local run, which has no trigger to report.
@@ -271,7 +275,7 @@ class Pipeline:
         """Run the full pipeline, return final verdict string."""
         self._fetch()
 
-        if self.pr.author_is_bot and not self.self_driving:
+        if self.refuses_bot_author():
             return self._refuse_bot_author()
 
         gate_verdict = self._classify_and_gate()
@@ -310,12 +314,40 @@ class Pipeline:
         self._run_gates()
         return self._gate_verdict()
 
-    def pending_attestations_cover_every_deny(self) -> bool:
-        """True when attestations that have not reported yet could lift every denied category.
+    @property
+    def admitted_bot(self) -> BotAuthor | None:
+        """The policy entry this PR's bot author matches, when the hosted server admitted it under one."""
+        if not (self.bot_author_review and self.pr.author_is_bot):
+            return None
+        return next(
+            (bot for bot in POLICY.bot_authors if bot.login == self.pr.author and bot.id == self.pr.author_id), None
+        )
 
+    def refuses_bot_author(self) -> bool:
+        return self.pr.author_is_bot and not self.self_driving and self.admitted_bot is None
+
+    @property
+    def sized_files(self) -> list[dict]:
+        """The files the size gate counts. CI proved an admitted bot's attested files instead."""
+        if self.admitted_bot is None:
+            return self.pr.files
+        unattested = set(self.classification.get("unattested_files") or [])
+        return [f for f in self.pr.files if f["filename"] in unattested]
+
+    def pending_attestations_clear_every_block(self) -> bool:
+        """True when attestations that have not reported yet could clear everything they block.
+
+        That is every denied category and, for an admitted bot, every file no result attested yet.
         A deny they cannot lift (auth, crypto) won't clear when they report, so it never waits.
         """
-        return bool(self.classification.get("pending_attestations_clear_deny"))
+        cl = self.classification
+        deny_blocks = bool(cl.get("deny_categories"))
+        file_blocks = self.admitted_bot is not None and bool(cl.get("unattested_files"))
+        return (
+            (deny_blocks or file_blocks)
+            and (not deny_blocks or bool(cl.get("pending_attestations_clear_deny")))
+            and (not file_blocks or bool(cl.get("pending_attestations_attest_every_file")))
+        )
 
     def _only_pending_attestations(self) -> bool:
         """True when the only thing blocking approval is an attestation that has not reported.
@@ -324,9 +356,9 @@ class Pipeline:
         deny-list one. Other gate failures (size, prerequisites) won't clear when it reports, so we
         shouldn't promise a re-label will help.
         """
-        if any(not r.passed and r.gate != "deny-list" for r in self.gate_results):
+        if any(not r.passed and r.gate not in ("deny-list", "attestations") for r in self.gate_results):
             return False
-        return self.pending_attestations_cover_every_deny()
+        return self.pending_attestations_clear_every_block()
 
     def _refuse_bot_author(self) -> str:
         """Hard gate: stamphog never reviews bot-authored PRs.
@@ -460,6 +492,13 @@ class Pipeline:
                 pr.deny_paths, lifted_files(POLICY.attestations, passing, pr.deny_paths)
             )
 
+        def unattested(assumed: Iterable[Attestation]) -> list[str]:
+            passing = assume_passing(assumed, results, pr.deny_paths)
+            listed = {
+                path for files in lifted_files(POLICY.attestations, passing, pr.deny_paths).values() for path in files
+            }
+            return sorted(set(pr.deny_paths) - listed)
+
         exception_lifted = bool(POLICY.deny_exceptions) and (
             detect_deny_categories(pr.deny_paths, attested, apply_exceptions=False) != deny
         )
@@ -550,6 +589,9 @@ class Pipeline:
             "pending_attestations_clear_deny": clears_deny(pending_rules),
             # A failed result can pass on a re-run, so the deny is not one only a human can clear.
             "attestations_could_clear_deny": clears_deny(POLICY.attestations),
+            # What an admitted bot's every_file_attested requirement reads.
+            "unattested_files": unattested(()),
+            "pending_attestations_attest_every_file": not unattested(pending_rules),
             "allow_listed_only": allow_only,
             "is_test_only": is_test,
             "has_dep_changes": has_dependency_changes(file_paths),
@@ -662,15 +704,21 @@ class Pipeline:
             self._diff_path = write_pr_diff(self.pr.base_sha, self.pr.head_sha, REPO_ROOT, self.pr.merge_base_sha)
         return self._diff_path
 
-    def _run_gates(self) -> None:
-        print(_bold("Gates"))
+    def gate_checks(self) -> list[tuple[str, Callable[[], tuple[bool, str]]]]:
+        """The deterministic gates, in order. Both the local run and the hosted runtime run these."""
         gates = [
             ("prerequisites", self._check_prerequisites),
             ("deny-list", self._check_deny_list),
             ("size", self._check_size),
             ("tier", self._check_tier),
         ]
-        for name, check in gates:
+        if self.admitted_bot is not None:
+            gates.insert(2, ("attestations", self._check_every_file_attested))
+        return gates
+
+    def _run_gates(self) -> None:
+        print(_bold("Gates"))
+        for name, check in self.gate_checks():
             passed, message = check()
             result = GateResult(name, passed, message)
             self.gate_results.append(result)
@@ -751,8 +799,15 @@ class Pipeline:
         self.classification["author_on_owning_team"] = len(author_teams) > 0
         return self.classification["ownership_summary"]
 
+    def _check_every_file_attested(self) -> tuple[bool, str]:
+        unattested = self.classification.get("unattested_files") or []
+        if not unattested:
+            return True, "CI attested every changed file"
+        listed = ", ".join(unattested[:5]) + (f" and {len(unattested) - 5} more" if len(unattested) > 5 else "")
+        return False, f"PRs by {self.pr.author} need CI to attest every changed file; not attested: {listed}"
+
     def _check_size(self) -> tuple[bool, str]:
-        lines, files = substantive_size(self.pr.files)
+        lines, files = substantive_size(self.sized_files)
         binary_count = sum(1 for f in self.pr.files if f.get("binary"))
         exempt_files = len(self.pr.files) - files
         suffix_parts = []
@@ -801,7 +856,7 @@ class Pipeline:
 
     def _files_in(self, scope: ScopeBudget) -> list[dict]:
         in_scope = set(scope.files)
-        return [f for f in self.pr.files if f["filename"] in in_scope]
+        return [f for f in self.sized_files if f["filename"] in in_scope]
 
     def _size_budgets(self) -> EffectivePolicy:
         """The PR's resolved size budgets, or global-only ones when resolution did not run."""

@@ -989,6 +989,8 @@ def _review_invocation(run: ReviewRun, merge_base_sha: str | None) -> ReviewerIn
         # The engine's carve-out for bot-authored drafts keys off this flag alone. It comes only
         # from the run's inbox provenance, stamped after the PR is linked to a signals run.
         self_driving_review=bool(output.get("inbox_review")),
+        # Stamped only after the webhook matched the author, the sender and the commits to the policy.
+        bot_author_review=bool(output.get("bot_author_review")),
         # Read as a description rather than a permission: the reviewer is told why it was asked,
         # and decides for itself what that means for this diff.
         review_trigger=trigger_for_run(output=output, review_mode=run.pull_request.repo_config.review_mode),

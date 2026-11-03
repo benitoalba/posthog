@@ -2210,6 +2210,54 @@ def test_rereview_after_external_review_retries_a_failure_with_backoff(
 
 
 @pytest.mark.django_db(databases=PRODUCT_DATABASES)
+@pytest.mark.parametrize(
+    "revoked, expected_new_runs",
+    [pytest.param(False, 1, id="still-admitted-reruns"), pytest.param(True, 0, id="revoked-stays-with-people")],
+)
+def test_rereview_after_external_review_reruns_a_waiting_bot_run(
+    team, stamphog_chain: StamphogChain, revoked: bool, expected_new_runs: int
+) -> None:
+    # A bot-authored PR trips the bot refusal, so the re-run must carry the admission its first run earned.
+    repo_config = _repo_config(team.id)
+    bot = {"login": "renovate[bot]", "id": 29139614, "type": "Bot"}
+    live_pr = _pr_object(127, "renovate[bot]", "sha127b") | {
+        "state": "open",
+        "user": bot,
+        "head": {"sha": "sha127b", "ref": "renovate/left-pad-1.x", "repo": {"full_name": REPO}},
+    }
+    stamphog_chain.recorder.register_pr(REPO, 127, live_pr, _pr_files())
+    stamphog_chain.recorder.pr_commits[(REPO, 127)] = [
+        {"sha": "sha127b", "author": {"id": 29139614}, "committer": {"login": "web-flow"}}
+        | {"commit": {"message": "chore(deps): update left-pad", "verification": {"verified": True}}}
+    ]
+    stamphog_chain.recorder.policy_files[".stamphog/policy.yml"] = (
+        "bot_authors:\n  - {login: 'renovate[bot]', id: 29139614, branch_prefix: 'renovate/', requires: every_file_attested}\n"
+    )
+    pull_request = PullRequest.objects.for_team(team.id).create(
+        team_id=team.id,
+        repo_config=repo_config,
+        pr_number=127,
+        author_login="renovate[bot]",
+        bot_admission_revoked_at=timezone.now() if revoked else None,
+    )
+    provenance = {"trigger": "webhook", "action": "opened", "login": "renovate[bot]"}
+    waiting = ReviewRun.objects.for_team(team.id).create(
+        team_id=team.id,
+        pull_request=pull_request,
+        head_sha="sha127b",
+        status=ReviewRunStatus.COMPLETED,
+        verdict=ReviewVerdict.WAIT,
+        output={"bot_author_review": provenance},
+    )
+
+    with patch("products.stamphog.backend.tasks.tasks.execute_stamphog_review_workflow"):
+        rereview_after_external_review(REPO, 127, "sha127b")
+
+    new_runs = ReviewRun.objects.for_team(team.id).filter(pull_request=pull_request).exclude(id=waiting.id)
+    assert [run.output.get("bot_author_review") for run in new_runs] == [provenance] * expected_new_runs
+
+
+@pytest.mark.django_db(databases=PRODUCT_DATABASES)
 def test_rereview_after_external_review_restarts_a_rerun_left_queued(team, stamphog_chain: StamphogChain) -> None:
     # The workflow start of an earlier re-run failed after its row committed. A later call must
     # restart that run instead of treating it as a live review.

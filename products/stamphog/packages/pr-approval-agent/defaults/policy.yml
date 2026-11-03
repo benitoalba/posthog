@@ -142,6 +142,8 @@ attestations:
       paths:
           - '(?:^|/)migrations/(?!__init__\.py$)[^/]+\.py$'
           - '(?:^|/)migrations/max_migration\.txt$'
+# Bots whose PRs stamphog reviews when CI proves every changed file. None by default.
+bot_authors: []
 allow:
     path_patterns:
         - 'docs/'

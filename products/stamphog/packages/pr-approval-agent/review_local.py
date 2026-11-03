@@ -272,6 +272,7 @@ def _build_pr_data(context: dict, *, checkout: bool = True) -> PRData:
         review_comments=review_comments,
         check_runs=context.get("check_runs") or [],
         author_is_bot=is_bot_author(user),
+        author_id=user.get("id") if isinstance(user.get("id"), int) else None,
         pr_reactions=pr_reactions,
         body=pr.get("body") or "",
         discussion=_normalize_discussion_for_prompt(context.get("discussion") or []),
@@ -312,18 +313,12 @@ def _author_team_slugs(context: dict) -> set[str]:
 
 
 def _run_gates_offline(pipeline: Pipeline) -> None:
-    """Run the four deterministic gate checks, the same ones that _run_gates runs.
+    """Run the deterministic gate checks, the same ones that _run_gates runs, without console output.
 
-    Mirrors Pipeline._run_gates without the console output. Set `pipeline.author_team_slugs` first
-    (see _author_team_slugs), or the membership checks call `gh`, which the sandbox cannot do.
+    Set `pipeline.author_team_slugs` first (see _author_team_slugs), or the membership checks call
+    `gh`, which the sandbox cannot do.
     """
-    gates = [
-        ("prerequisites", pipeline._check_prerequisites),
-        ("deny-list", pipeline._check_deny_list),
-        ("size", pipeline._check_size),
-        ("tier", pipeline._check_tier),
-    ]
-    for name, check in gates:
+    for name, check in pipeline.gate_checks():
         passed, message = check()
         pipeline.gate_results.append(GateResult(name, passed, message))
 
@@ -434,9 +429,11 @@ def _blocked_only_by_pending_attestations(pipeline: Pipeline) -> bool:
     """
     pr = pipeline.pr
     cl = pipeline.classification
-    if not pipeline.pending_attestations_cover_every_deny():
+    if not pipeline.pending_attestations_clear_every_block():
         return False
-    if any(not gate.passed and gate.gate not in ("deny-list", "tier") for gate in pipeline.gate_results):
+    if any(
+        not gate.passed and gate.gate not in ("deny-list", "attestations", "tier") for gate in pipeline.gate_results
+    ):
         return False
     tier_without_denies = assign_tier(
         deny_categories=[],
@@ -470,7 +467,7 @@ def _size_denial_is_final(pipeline: Pipeline, folder_policies_known: bool) -> bo
     """
     if folder_policies_known:
         return True
-    lines, files = substantive_size(pipeline.pr.files)
+    lines, files = substantive_size(pipeline.sized_files)
     line_contract = POLICY.overrides.get("size_gate.max_lines")
     file_contract = POLICY.overrides.get("size_gate.max_files")
     line_ceiling = max(POLICY.size_gate.max_lines, line_contract.ceiling if line_contract else 0)
@@ -497,7 +494,7 @@ def _denial_is_final(pipeline: Pipeline, folder_policies_known: bool) -> bool:
     """
     failed = {gate.gate for gate in pipeline.gate_results if not gate.passed}
     if (
-        pipeline.pending_attestations_cover_every_deny()
+        pipeline.pending_attestations_clear_every_block()
         and "prerequisites" not in failed
         and not _pending_attestation_outcome_is_known(pipeline, folder_policies_known)
     ):
@@ -561,6 +558,7 @@ def pregate(context: dict) -> dict:
         0,
         context.get("repo") or "",
         self_driving=bool(context.get("self_driving_review")),
+        bot_author_review=bool(context.get("bot_author_review")),
         review_trigger=str(context.get("review_trigger") or ""),
         head_checkout=True,
         checkout=False,
@@ -573,7 +571,7 @@ def pregate(context: dict) -> dict:
     folder_policies_known = context.get("folder_policies_known") is True
     outcome = {"final": False, "needs_summary": False, "summary_model": SUMMARY_MODEL, "result": None}
 
-    if pipeline.pr.author_is_bot and not pipeline.self_driving:
+    if pipeline.refuses_bot_author():
         pipeline._refuse_bot_author()
         return {**outcome, "final": True, "result": pipeline.to_dict()}
 
@@ -661,6 +659,7 @@ def run(context: dict) -> dict:
         0,
         context.get("repo") or "",
         self_driving=bool(context.get("self_driving_review")),
+        bot_author_review=bool(context.get("bot_author_review")),
         review_trigger=str(context.get("review_trigger") or ""),
         head_checkout=True,
     )
@@ -669,7 +668,7 @@ def run(context: dict) -> dict:
     # properties are null for every hosted review.
     pipeline.provenance = _context_provenance(context, pipeline.pr)
 
-    if pipeline.pr.author_is_bot and not pipeline.self_driving:
+    if pipeline.refuses_bot_author():
         pipeline._refuse_bot_author()
         return pipeline.to_dict()
 
