@@ -19,9 +19,9 @@ from posthog.hogql.context import HogQLContext
 from posthog.hogql.printer import prepare_and_print_ast
 
 from posthog.hogql_queries.ai.event_taxonomy_query_runner import EventTaxonomyQueryRunner
-from posthog.models import PropertyDefinition
 
 from products.actions.backend.models.action import Action
+from products.event_definitions.backend.models import PropertyDefinition
 from products.event_definitions.backend.models.property_definition import PropertyType
 
 

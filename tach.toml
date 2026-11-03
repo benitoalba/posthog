@@ -327,6 +327,7 @@ layer = "modules"
 [[modules]]
 path = "products.dashboards"
 depends_on = [
+    "products.event_definitions",
     "products.notebooks",
     "ee",
     "posthog",
@@ -417,6 +418,7 @@ depends_on = [
     "products.ai_observability",
     "products.annotations",
     "products.dashboards",
+    "products.event_definitions",
     "products.exports",
     "products.notifications",
     "products.posthog_ai",
@@ -448,6 +450,7 @@ depends_on = [
     "products.data_modeling",
     "products.data_tools",
     "products.data_warehouse",
+    "products.event_definitions",
     "products.notifications",
     "products.posthog_ai",
     "products.revenue_analytics",
@@ -1175,6 +1178,7 @@ depends_on = [
     "posthog",
     "products.actions",
     "products.analytics_platform",
+    "products.event_definitions",
     "products.notifications",
     # The web trends, web vitals and calendar heatmap runners subclass product analytics' trends runners.
     "products.product_analytics",
@@ -1196,6 +1200,7 @@ depends_on = [
     "products.cdp",
     "products.early_access_features",
     "products.error_tracking",
+    "products.event_definitions",
     "products.feature_flags",
     "products.surveys",
     "products.messaging",

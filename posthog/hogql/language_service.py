@@ -29,11 +29,12 @@ from posthog.hogql.errors import QueryError, ResolutionError
 from posthog.hogql.timings import HogQLTimings
 
 from posthog.jwt import PosthogJwtAudience, encode_jwt
-from posthog.models import PropertyDefinition, Team, User
+from posthog.models import Team, User
 from posthog.redis import get_client
 from posthog.security.outbound_proxy import internal_requests
 from posthog.taxonomy.property_access import restricted_property_names
 
+from products.event_definitions.backend.models import PropertyDefinition
 from products.event_definitions.backend.models.property_definition import effective_project_id_expr
 
 if TYPE_CHECKING:

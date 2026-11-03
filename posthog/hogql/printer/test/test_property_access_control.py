@@ -12,11 +12,11 @@ from posthog.hogql.printer import prepare_and_print_ast
 from posthog.hogql.query import execute_hogql_query
 
 from posthog.constants import AvailableFeature
-from posthog.models import PropertyDefinition
 from posthog.models.event.util import create_event
 
 from products.access_control.backend.models.property_access_control import PropertyAccessControl
 from products.access_control.backend.property_access_control import PropertyAccessLevel
+from products.event_definitions.backend.models import PropertyDefinition
 
 
 class TestRestrictPropertiesInHogQL(BaseTest):
