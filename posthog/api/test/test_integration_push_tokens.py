@@ -10,7 +10,9 @@ from posthog.api.capture import CaptureInternalResult
 from posthog.api.integration_push_tokens import MAX_SUBSCRIPTIONS_PER_REQUEST, _TokenCipher
 from posthog.models.integration import Integration
 from posthog.models.organization import Organization, OrganizationMembership
+from posthog.models.personal_api_key import PersonalAPIKey
 from posthog.models.team import Team
+from posthog.models.utils import generate_random_token_personal, hash_key_value
 
 
 def _capture_dropping(dropped_distinct_ids: set[str], warning_details: dict[str, str] | None = None):
@@ -182,6 +184,26 @@ class TestPushTokenImport(APIBaseTest):
         with patch("posthog.api.integration_push_tokens.capture_batch_internal") as capture:
             response = self._import(slack.id, [{"distinct_id": "user-1", "device_token": "a1b2c3d4"}])
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+        capture.assert_not_called()
+
+    @parameterized.expand(
+        [
+            ("integration_only", ["integration:write"], status.HTTP_403_FORBIDDEN),
+            ("with_person_write", ["integration:write", "person:write"], status.HTTP_200_OK),
+        ]
+    )
+    def test_an_api_key_needs_person_write_to_import(self, _name: str, scopes: list[str], expected: int) -> None:
+        token = generate_random_token_personal()
+        PersonalAPIKey.objects.create(label="t", user=self.user, secure_value=hash_key_value(token), scopes=scopes)
+        self.client.logout()
+        with patch("posthog.api.integration_push_tokens.capture_batch_internal") as capture:
+            response = self.client.post(
+                f"/api/environments/{self.team.pk}/integrations/{self.apns.id}/push_tokens/",
+                {"subscriptions": [{"distinct_id": "user-1", "device_token": "a1b2c3d4"}], "dry_run": True},
+                format="json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+        assert response.status_code == expected, response.json()
         capture.assert_not_called()
 
     def test_cannot_import_into_another_teams_channel(self) -> None:
