@@ -4,10 +4,7 @@ import { LemonButton, LemonDialog, LemonInput, LemonLabel, LemonModal } from '@p
 
 import { ExperimentMetricForm } from 'scenes/experiments/ExperimentMetricForm'
 import { exposureCriteriaModalLogic } from 'scenes/experiments/ExperimentView/exposureCriteriaModalLogic'
-import {
-    PERCENTILE_METRIC_SEQUENTIAL_DISABLED_REASON,
-    experimentUsesSequentialTesting,
-} from 'scenes/experiments/ExperimentView/sequential'
+import { percentileMetricSequentialReason } from 'scenes/experiments/ExperimentView/sequential'
 import { resolveFilterTestAccounts, resolvedExposureEvent } from 'scenes/experiments/exposureContract'
 import { getMetricIncompleteReason } from 'scenes/experiments/utils'
 import { experimentsConfigLogic } from 'scenes/settings/environment/experimentsConfigLogic'
@@ -43,13 +40,11 @@ export function ExperimentMetricModal({
 
     const saveDisabledReason =
         getMetricIncompleteReason(metric) ??
-        (isExperimentQuantileMetric(metric) &&
-        experimentUsesSequentialTesting(
+        percentileMetricSequentialReason(
+            isExperimentQuantileMetric(metric),
             experiment.stats_config,
             experimentsConfig?.default_sequential_testing_enabled ?? false
         )
-            ? PERCENTILE_METRIC_SEQUENTIAL_DISABLED_REASON
-            : undefined)
 
     return (
         <LemonModal
