@@ -5,6 +5,7 @@ import { LemonButton, LemonDialog, LemonInput, LemonLabel, LemonModal } from '@p
 import { ExperimentMetricForm } from 'scenes/experiments/ExperimentMetricForm'
 import { exposureCriteriaModalLogic } from 'scenes/experiments/ExperimentView/exposureCriteriaModalLogic'
 import { resolveFilterTestAccounts, resolvedExposureEvent } from 'scenes/experiments/exposureContract'
+import { getMetricIncompleteReason } from 'scenes/experiments/utils'
 
 import type { ExperimentExposureCriteria, ExperimentMetric } from '~/queries/schema/schema-general'
 import type { Experiment } from '~/types'
@@ -73,6 +74,7 @@ export function ExperimentMetricModal({
                         <LemonButton
                             form="edit-experiment-metric-form"
                             onClick={() => onSave(metric, context)}
+                            disabledReason={getMetricIncompleteReason(metric)}
                             type="primary"
                             data-attr="save-experiment-metric"
                         >

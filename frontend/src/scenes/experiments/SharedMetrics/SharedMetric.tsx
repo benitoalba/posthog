@@ -36,7 +36,7 @@ import { QuillSharedMetricActions } from 'products/experiments/frontend/componen
 import type { ExperimentSavedMetricLinkedExperimentApi } from 'products/experiments/frontend/generated/api.schemas'
 
 import { ExperimentMetricForm } from '../ExperimentMetricForm'
-import { isLegacyExperimentQuery } from '../utils'
+import { getMetricIncompleteReason, isLegacyExperimentQuery } from '../utils'
 import { openDeleteSharedMetricDialog } from './deleteSharedMetricDialog'
 import { SharedMetricLinkedExperiments } from './SharedMetricLinkedExperiments'
 import { SharedMetricLogicProps, sharedMetricLogic } from './sharedMetricLogic'
@@ -104,9 +104,11 @@ export function SharedMetric(): JSX.Element {
     const isLegacy = isLegacyExperimentQuery(sharedMetric?.query)
     const saveDisabledReason = isLegacy
         ? 'Legacy shared metrics can no longer be edited'
-        : sharedMetric?.name
-          ? undefined
-          : 'You must give your metric a name'
+        : !sharedMetric?.name
+          ? 'You must give your metric a name'
+          : sharedMetric.query
+            ? getMetricIncompleteReason(sharedMetric.query as ExperimentMetric)
+            : undefined
 
     const handleDelete = async (): Promise<void> => {
         if (!sharedMetric.id || deleteCheckLoading) {
