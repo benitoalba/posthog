@@ -25,11 +25,11 @@ import { AccessControlLevel, AccessControlResourceType } from '~/types'
 
 import { ModelsLineageTab } from 'products/data_modeling/frontend/lineage/ModelsLineageTab'
 
-import { CatalogModelsSection } from './CatalogModelsSection'
 import { CatalogOverview } from './CatalogOverview'
 import { CatalogUsageSection } from './CatalogUsageSection'
 import { DataCatalogTab, dataCatalogSceneLogic } from './dataCatalogSceneLogic'
 import { relationshipsLogic } from './relationshipsLogic'
+import { CatalogTablesSection } from './tables/CatalogTablesSection'
 import { MetricsTab } from './tabs/MetricsTab'
 import { RelationshipsTab } from './tabs/RelationshipsTab'
 
@@ -47,7 +47,7 @@ const SECTION_LABELS: Record<DataCatalogTab, string> = {
 
 const SECTION_CONTENT: Partial<Record<DataCatalogTab, () => JSX.Element>> = {
     overview: CatalogOverview,
-    tables: CatalogModelsSection,
+    tables: CatalogTablesSection,
     lineage: ModelsLineageTab,
     metrics: MetricsTab,
     relationships: RelationshipsTab,
