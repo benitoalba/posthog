@@ -75,7 +75,7 @@ export function TransactionalEmailPersonCard({ distinctId }: { distinctId: strin
 
     return (
         <div
-            className="border rounded bg-surface-primary p-4 flex flex-col gap-4"
+            className="ph-no-capture border rounded bg-surface-primary p-4 flex flex-col gap-4"
             data-attr="transactional-email-person"
         >
             <div className="flex items-center gap-3 min-w-0">

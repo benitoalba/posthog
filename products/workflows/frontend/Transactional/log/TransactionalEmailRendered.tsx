@@ -24,7 +24,7 @@ export function TransactionalEmailRendered({ email }: { email: TransactionalEmai
     }
     return (
         <section className="border rounded bg-surface-primary overflow-hidden">
-            <dl className="m-0 px-4 py-3 border-b grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+            <dl className="ph-no-capture m-0 px-4 py-3 border-b grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
                 <dt className="text-secondary">To</dt>
                 <dd className="m-0 truncate">{email.recipient}</dd>
                 <dt className="text-secondary">Subject</dt>

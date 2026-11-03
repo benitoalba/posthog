@@ -150,6 +150,7 @@ export function TransactionalEmailLog(): JSX.Element {
                             <LemonTableLink
                                 to={urls.transactionalEmailLogEntry(email.message_id)}
                                 title={<EmailAddress address={email.recipient} />}
+                                className="ph-no-capture"
                             />
                         ),
                     },

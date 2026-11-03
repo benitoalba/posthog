@@ -55,13 +55,15 @@ export function TransactionalEmailDetails({ email }: { email: TransactionalEmail
                 {email.sending_domain && <DetailRow label="Sending domain">{email.sending_domain}</DetailRow>}
                 {email.distinct_id && (
                     <DetailRow label="Distinct ID" stacked>
-                        <CopyToClipboardInline
-                            description="distinct ID"
-                            explicitValue={email.distinct_id}
-                            iconSize="xsmall"
-                        >
-                            <span className="font-mono text-xs">{email.distinct_id}</span>
-                        </CopyToClipboardInline>
+                        <span className="ph-no-capture">
+                            <CopyToClipboardInline
+                                description="distinct ID"
+                                explicitValue={email.distinct_id}
+                                iconSize="xsmall"
+                            >
+                                <span className="font-mono text-xs">{email.distinct_id}</span>
+                            </CopyToClipboardInline>
+                        </span>
                     </DetailRow>
                 )}
                 <DetailRow label="Message ID" stacked>
