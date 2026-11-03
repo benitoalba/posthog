@@ -254,6 +254,9 @@ const integrationsPushTokensCreate = (): ToolBase<
         if (params.dry_run !== undefined) {
             body['dry_run'] = params.dry_run
         }
+        if (params.import_id !== undefined) {
+            body['import_id'] = params.import_id
+        }
         if (params.create_missing_persons !== undefined) {
             body['create_missing_persons'] = params.create_missing_persons
         }
