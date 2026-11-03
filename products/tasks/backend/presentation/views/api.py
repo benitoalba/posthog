@@ -467,10 +467,12 @@ class TaskUsageUpstreamUnavailable(APIException):
     default_code = "task_usage_upstream_unavailable"
 
 
-def _requested_origin_product(data: dict) -> object:
+def _requests_signal_report_origin(data: dict) -> bool:
+    if data.get("origin_product") == "signal_report":
+        return True
     profile_key = data.get("profile")
     profile = find_task_profile(profile_key) if isinstance(profile_key, str) else None
-    return profile.origin_product if profile is not None else data.get("origin_product")
+    return profile is not None and profile.origin_product == "signal_report"
 
 
 class _SignalReportTaskThrottle(UserRateThrottle):
@@ -483,7 +485,7 @@ class _SignalReportTaskThrottle(UserRateThrottle):
 
     def allow_request(self, request: Request, view: APIView) -> bool:
         data = request.data
-        if not isinstance(data, dict) or _requested_origin_product(data) != "signal_report":
+        if not isinstance(data, dict) or not _requests_signal_report_origin(data):
             return True
         return super().allow_request(request, view)
 
