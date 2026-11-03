@@ -179,13 +179,21 @@ def validate_run_options(
         raise TaskRunOptionsError("; ".join(refusals))
 
 
+def run_only_option_names(options: TaskRunOptions) -> list[str]:
+    settings = _settings_from(options)
+    return sorted(
+        {
+            *(_OPTION_NAMES.get(name, name) for name in settings if name not in TASK_SETTINGS),
+            *_run_state_from(options),
+        }
+    )
+
+
 def apply_run_options(options: TaskRunOptions, given: RunSettings, *, creates_run: bool = True) -> RunSettings:
     settings = _settings_from(options)
     run_state = _run_state_from(options)
     if not creates_run:
-        run_only = sorted(
-            {*(_OPTION_NAMES.get(name, name) for name in settings if name not in TASK_SETTINGS), *run_state}
-        )
+        run_only = run_only_option_names(options)
         if run_only:
             raise TaskRunOptionsError(f"{', '.join(run_only)} only apply to a run. Pass them when the run is created")
     given_run_state = given.extra_run_state or {}

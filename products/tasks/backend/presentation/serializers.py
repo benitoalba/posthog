@@ -95,7 +95,12 @@ from products.tasks.backend.public_create import (
     public_idempotency_key,
     request_fingerprint,
 )
-from products.tasks.backend.run_options import RunOptionsCaller, run_options_record, validate_run_options
+from products.tasks.backend.run_options import (
+    RunOptionsCaller,
+    run_only_option_names,
+    run_options_record,
+    validate_run_options,
+)
 from products.tasks.backend.task_profiles import PUBLIC_RUN_OPTIONS
 
 logger = logging.getLogger(__name__)
@@ -1328,7 +1333,9 @@ class TaskCreateSerializer(TaskWriteSerializer, TaskRunScheduleSerializer):
         write_only=True,
         help_text=(
             "Settings for this task, checked against the profile. Only the options the profile makes public are "
-            "accepted. Requires `profile`. Do not repeat a setting that you also send at the top level."
+            "accepted. Requires `profile`. Do not repeat a setting that you also send at the top level. "
+            "Settings for the first run also require `start_run`: `adapter`, `model`, `reasoning_effort`, "
+            "`permission_mode`, `auto_publish` and the `initial_branch` of a repository."
         ),
     )
     source = TaskSourceRequestSerializer(  # type: ignore[assignment]
@@ -1411,6 +1418,9 @@ class TaskCreateSerializer(TaskWriteSerializer, TaskRunScheduleSerializer):
             validate_run_options(profile, options, caller=RunOptionsCaller.PUBLIC)
         except TaskRunOptionsError as error:
             raise serializers.ValidationError({"options": str(error)}) from error
+        run_only = run_only_option_names(options)
+        if run_only and not attrs.get("start_run"):
+            raise serializers.ValidationError({"options": f"Set start_run to true to use {', '.join(run_only)}."})
         fields = create_fields_from_options(options)
         repeated = sorted(
             name

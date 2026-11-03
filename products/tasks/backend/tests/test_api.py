@@ -7048,14 +7048,14 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
         response = self._create(
             profile="test.public",
             github_integration=integration.id,
-            options={"repositories": [{"name": "PostHog/PostHog", "initial_branch": "main"}]},
+            options={"repositories": [{"name": "PostHog/PostHog"}]},
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
         task = Task.objects.get(id=response.json()["id"])
         self.assertEqual(task.repositories, ["posthog/posthog"])
         self.assertEqual(
-            (task.options or {}).get("repositories"), [{"name": "posthog/posthog", "initial_branch": "main"}]
+            (task.options or {}).get("repositories"), [{"name": "posthog/posthog", "initial_branch": None}]
         )
 
     @patch("products.tasks.backend.presentation.views.api._is_internal_debug_team", return_value=True)
@@ -7097,6 +7097,24 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
                 "option_the_endpoint_does_not_take",
                 {"profile": "test.public", "options": {"idle_minutes": 5}},
                 "options__idle_minutes",
+            ),
+            (
+                "run_option_without_start_run",
+                {"profile": "test.public", "options": {"model": "claude-sonnet-5"}},
+                "options",
+            ),
+            (
+                "some_run_options_without_start_run",
+                {"profile": "test.public", "options": {"runtime": "pi", "model": "claude-sonnet-5"}},
+                "options",
+            ),
+            (
+                "initial_branch_without_start_run",
+                {
+                    "profile": "test.public",
+                    "options": {"repositories": [{"name": "posthog/posthog", "initial_branch": "main"}]},
+                },
+                "options",
             ),
             (
                 "option_repeated_at_the_top_level",

@@ -617,7 +617,7 @@ export const TasksCreateBody = () => zod.object({
         })
         .optional()
         .describe(
-            'Settings for this task, checked against the profile. Only the options the profile makes public are accepted. Requires `profile`. Do not repeat a setting that you also send at the top level.'
+            'Settings for this task, checked against the profile. Only the options the profile makes public are accepted. Requires `profile`. Do not repeat a setting that you also send at the top level. Settings for the first run also require `start_run`: `adapter`, `model`, `reasoning_effort`, `permission_mode`, `auto_publish` and the `initial_branch` of a repository.'
         ),
     source: zod
         .object({
