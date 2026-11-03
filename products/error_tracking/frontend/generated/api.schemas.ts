@@ -2220,6 +2220,8 @@ export interface PatchedErrorTrackingReleaseUpdateRequestApi {
 }
 
 export interface ErrorTrackingSettingsApi {
+    /** Project preference for adaptive ingestion. Turning this on does not currently change ingestion. */
+    adaptive_ingestion_enabled?: boolean
     /**
      * Maximum number of exception events ingested per bucket for the entire project. Null removes the limit.
      * @minimum 1
@@ -2249,6 +2251,8 @@ export interface ErrorTrackingSettingsApi {
 }
 
 export interface PatchedErrorTrackingSettingsApi {
+    /** Project preference for adaptive ingestion. Turning this on does not currently change ingestion. */
+    adaptive_ingestion_enabled?: boolean
     /**
      * Maximum number of exception events ingested per bucket for the entire project. Null removes the limit.
      * @minimum 1
