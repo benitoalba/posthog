@@ -114,8 +114,8 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     def initial(self, request: Request, *args: Any, **kwargs: Any) -> None:
         super().initial(request, *args, **kwargs)
         # Session users skip API scopes, and access control checks only the integration scope_object.
-        level = "editor" if self.action in self.scope_object_write_actions else "viewer"
-        if not self.user_access_control.check_access_level_for_resource("person", level):
+        writes = self.action in self.scope_object_write_actions
+        if not self.user_access_control.check_access_level_for_resource("person", "editor" if writes else "viewer"):
             raise exceptions.PermissionDenied("You need access to persons to import push devices.")
 
     def get_throttles(self) -> list[Any]:

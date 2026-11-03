@@ -101,7 +101,7 @@ class TestPushTokenImportJob(APIBaseTest):
             config={"bundle_id": "com.example.app", "team_id": "TEAM", "key_id": "KEY"},
         )
         self.storage = _MemoryStorage()
-        for patcher in [
+        patchers: list[Any] = [
             patch.object(push_token_import, "object_storage", self.storage),
             patch.object(push_token_import, "BATCH_SIZE", 2),
             patch.object(push_token_import, "BATCHES_PER_TASK", 1),
@@ -109,7 +109,8 @@ class TestPushTokenImportJob(APIBaseTest):
             patch("products.workflows.backend.tasks.push_token_import.check_push_token_import_stalled.apply_async"),
             patch("products.workflows.backend.tasks.push_token_import.expire_push_token_import_devices.apply_async"),
             patch.object(push_token_import, "ph_scoped_capture"),
-        ]:
+        ]
+        for patcher in patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
         self.captured: list[list[dict[str, Any]]] = []

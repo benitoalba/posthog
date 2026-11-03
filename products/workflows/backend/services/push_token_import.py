@@ -17,6 +17,7 @@ from posthog.api.integration_push_tokens import (
     MAX_SUBSCRIPTIONS_PER_REQUEST,
     TOKEN_SUFFIX_LENGTH,
     PushTokenImportFailure,
+    PushTokenImportFailureReason,
     import_push_tokens,
     push_channel_app_id,
 )
@@ -269,7 +270,7 @@ def run_push_token_import_batches(team_id: int, import_id: uuid.UUID) -> bool:
         )
         for device, failure in failed:
             line = device["line"]
-            if failure.reason == PushTokenImportRowFailureReason.UNKNOWN_PERSON:
+            if failure.reason == PushTokenImportFailureReason.UNKNOWN_PERSON:
                 job.unknown_person_lines.append(line)
             if len(job.failures) < MAX_STORED_FAILURES:
                 job.failures.append(
@@ -346,7 +347,7 @@ def _send_batch(
         retry: list[StagedDevice] = []
         for failure in result.failed:
             device = pending[failure.index]
-            if failure.reason == PushTokenImportRowFailureReason.NOT_STORED and attempt + 1 < NOT_STORED_ATTEMPTS:
+            if failure.reason == PushTokenImportFailureReason.NOT_STORED and attempt + 1 < NOT_STORED_ATTEMPTS:
                 retry.append(device)
             else:
                 failed.append((device, failure))
