@@ -817,6 +817,37 @@ class TestFacadeReadsAndMappers(TestCase):
         if gate != "warm_resume":
             self.assertEqual(refused_by_gate, refused)
 
+    @parameterized.expand(
+        [
+            ("signal_report_in_the_team", SourceKind.SIGNAL_REPORT, False, False, True),
+            ("signal_report_in_another_team", SourceKind.SIGNAL_REPORT, True, False, False),
+            ("signal_report_with_a_malformed_id", SourceKind.SIGNAL_REPORT, False, True, False),
+            ("hog_flow_in_the_team", SourceKind.HOG_FLOW, False, False, True),
+            ("hog_flow_in_another_team", SourceKind.HOG_FLOW, True, False, False),
+            ("loop_without_a_row_to_check", SourceKind.LOOP, False, False, False),
+        ]
+    )
+    def test_task_source_in_team(
+        self, _name: str, kind: SourceKind, in_other_team: bool, malformed_id: bool, expected: bool
+    ) -> None:
+        from products.signals.backend.models import SignalReport
+        from products.workflows.backend.models.hog_flow.hog_flow import HogFlow
+
+        owner = Team.objects.create(organization=self.organization, name="Other team") if in_other_team else self.team
+        row_id = (
+            SignalReport.objects.create(team=owner).id
+            if kind == SourceKind.SIGNAL_REPORT
+            else HogFlow.objects.create(
+                team=owner, name="Flow", created_by=self.user, trigger={"type": "manual"}, actions=[]
+            ).id
+            if kind == SourceKind.HOG_FLOW
+            else uuid4()
+        )
+
+        source = TaskSource(kind=kind, id="not-an-id" if malformed_id else str(row_id))
+
+        self.assertIs(facade.task_source_in_team(self.team.id, source), expected)
+
     def test_task_control_runtime_and_origin_uses_control_predicate(self):
         task = self._make_task(origin_product=Task.OriginProduct.POSTHOG_AI, runtime=Task.Runtime.PI)
         self.assertEqual(
