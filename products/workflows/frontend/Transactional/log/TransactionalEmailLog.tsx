@@ -8,45 +8,14 @@ import { DateFilter } from 'lib/components/DateFilter/DateFilter'
 import { TZLabel } from 'lib/components/TZLabel'
 import { LemonTable } from 'lib/lemon-ui/LemonTable'
 import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
-import { CUSTOM_OPTION_KEY } from 'lib/utils/dateFilters'
-import { DATE_TIME_FORMAT, formatDateRange } from 'lib/utils/datetime'
+import { INVOCATIONS_DATE_OPTIONS } from 'scenes/hog-functions/invocations/invocationsDateOptions'
 import { urls } from 'scenes/urls'
-
-import { DateMappingOption } from '~/types'
 
 import type { TransactionalEmailLogEntryApi } from 'products/messaging/frontend/generated/api.schemas'
 
 import { messageTemplatesLogic } from '../../TemplateLibrary/messageTemplatesLogic'
 import { EMAIL_STATUS_DESCRIPTION, EMAIL_STATUS_LABEL, EMAIL_STATUS_TAG, emailReasonText } from './emailLogStatus'
 import { DEFAULT_LOG_FILTERS, LOG_RETENTION_DAYS, transactionalEmailLogLogic } from './transactionalEmailLogLogic'
-
-const LOG_DATE_OPTIONS: DateMappingOption[] = [
-    { key: CUSTOM_OPTION_KEY, values: [] },
-    {
-        key: 'Last 1 hour',
-        values: ['-1h'],
-        getFormattedDate: (date) => date.subtract(1, 'hour').format(DATE_TIME_FORMAT),
-        defaultInterval: 'hour',
-    },
-    {
-        key: 'Last 24 hours',
-        values: ['-24h'],
-        getFormattedDate: (date) => date.subtract(24, 'hour').format(DATE_TIME_FORMAT),
-        defaultInterval: 'hour',
-    },
-    {
-        key: 'Last 7 days',
-        values: ['-7d'],
-        getFormattedDate: (date) => formatDateRange(date.subtract(7, 'd'), date.endOf('d')),
-        defaultInterval: 'day',
-    },
-    {
-        key: 'Last 30 days',
-        values: ['-30d'],
-        getFormattedDate: (date) => formatDateRange(date.subtract(30, 'd'), date.endOf('d')),
-        defaultInterval: 'day',
-    },
-]
 
 /** Lets a long address wrap before its domain instead of mid-word. */
 function EmailAddress({ address }: { address: string }): JSX.Element {
@@ -123,10 +92,10 @@ export function TransactionalEmailLog(): JSX.Element {
                         onChange={(dateFrom, dateTo) =>
                             setFilters({ dateFrom: dateFrom || DEFAULT_LOG_FILTERS.dateFrom, dateTo: dateTo || null })
                         }
-                        dateOptions={LOG_DATE_OPTIONS}
+                        dateOptions={INVOCATIONS_DATE_OPTIONS}
                         allowTimePrecision
                         allowFixedRangeWithTime
-                        allowedRollingDateOptions={['hours', 'days']}
+                        allowedRollingDateOptions={['minutes', 'hours', 'days', 'weeks']}
                         max={LOG_RETENTION_DAYS}
                         use24HourFormat
                         data-attr="transactional-email-log-date-filter"
