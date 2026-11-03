@@ -28,6 +28,8 @@ async def signal_github_access_restored(workflow_ids: list[str]) -> None:
     ignore_result=True,
     soft_time_limit=240,
     time_limit=300,
+    acks_late=True,
+    reject_on_worker_lost=True,
     autoretry_for=(Exception,),
     retry_backoff=10,
     max_retries=5,

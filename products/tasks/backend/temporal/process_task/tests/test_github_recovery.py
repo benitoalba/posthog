@@ -73,6 +73,7 @@ async def test_recovery_waits_for_access_event_or_original_deadline(case: str) -
             if case == "during_check":
                 restored = True
                 await handle.signal(GitHubRecoveryTestWorkflow.github_access_restored)
+                await handle.signal(GitHubRecoveryTestWorkflow.github_access_restored)
                 release_check.set()
             elif case == "expire":
                 assert await handle.result() is False
