@@ -113,6 +113,7 @@ def _run_state_from(options: TaskRunOptions) -> dict[str, Any]:
     return state
 
 
+_ALWAYS_ENFORCED_FOR_PUBLIC = frozenset({ContractCheck.PUBLIC_OPTIONS})
 _GITHUB_ACCESS_RANK = {GithubAccess.NONE: 0, GithubAccess.READ: 1, GithubAccess.WRITE: 2}
 
 
@@ -168,10 +169,11 @@ def validate_run_options(
 ) -> None:
     if profile is None or options is None:
         return
+    enforced = _ALWAYS_ENFORCED_FOR_PUBLIC if caller == RunOptionsCaller.PUBLIC else frozenset()
     refusals = [
         detail
         for check, detail in _run_option_violations(profile, options, caller)
-        if contract_violation_refused(profile, check, detail)
+        if contract_violation_refused(profile, check, detail, enforced=enforced)
     ]
     if refusals:
         raise TaskRunOptionsError("; ".join(refusals))
