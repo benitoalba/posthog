@@ -5,6 +5,7 @@ import csv
 import json
 import time
 import uuid
+import zlib
 from datetime import timedelta
 from typing import TypedDict
 
@@ -88,11 +89,8 @@ class _DeviceCipher(EncryptedFieldMixin):
 
 def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
     """Reads a CSV with a header row into devices. Raises `PushTokenImportInvalid` when the file can't be used."""
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise PushTokenImportInvalid('This file isn\'t saved as UTF-8. Save it as "CSV UTF-8" and upload it again.')
-    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    # Decoding while reading keeps a second, wider copy of the whole file out of memory.
+    reader = csv.reader(io.TextIOWrapper(io.BytesIO(content), encoding="utf-8-sig", newline=""), strict=True)
     devices: list[StagedDevice] = []
     rejected: list[PushTokenImportRowFailure] = []
     rejected_lines = 0
@@ -136,6 +134,8 @@ def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
                 continue
             seen.add(key)
             devices.append({"line": line, "distinct_id": distinct_id, "device_token": device_token})
+    except UnicodeDecodeError:
+        raise PushTokenImportInvalid('This file isn\'t saved as UTF-8. Save it as "CSV UTF-8" and upload it again.')
     except csv.Error as error:
         raise PushTokenImportInvalid(f"Line {reader.line_num} of the file can't be read: {error}.")
     if distinct_id_column < 0:
@@ -437,7 +437,7 @@ def _create_import(
 
     import_id = uuid.uuid4()
     storage_key = f"{_STORAGE_FOLDER}/team-{team.id}/{import_id}.json"
-    object_storage.write(storage_key, _DeviceCipher().encrypt(json.dumps(devices)))
+    object_storage.write(storage_key, _encrypt_devices(devices))
     try:
         with transaction.atomic():
             job = PushTokenImport.objects.for_team(team.id).create(
@@ -562,8 +562,13 @@ def _can_import_unknown_persons(job: PushTokenImport) -> bool:
 
 
 def _read_devices(storage_key: str) -> list[StagedDevice]:
-    content = object_storage.read(storage_key, missing_ok=True) if storage_key else None
-    return json.loads(_DeviceCipher().decrypt(content)) if content else []
+    content = object_storage.read_bytes(storage_key, missing_ok=True) if storage_key else None
+    return json.loads(zlib.decompress(_DeviceCipher().f.decrypt(content))) if content else []
+
+
+def _encrypt_devices(devices: list[StagedDevice]) -> bytes:
+    # Compressing first keeps the copies the cipher makes of a full-size file small.
+    return _DeviceCipher().f.encrypt(zlib.compress(json.dumps(devices, separators=(",", ":")).encode(), 1))
 
 
 def _release_devices(team_id: int, import_id: uuid.UUID, storage_key: str) -> None:

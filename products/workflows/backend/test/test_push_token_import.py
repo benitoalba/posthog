@@ -34,12 +34,12 @@ APNS_TOKEN = "a1" * 32
 
 class _MemoryStorage:
     def __init__(self) -> None:
-        self.objects: dict[str, str] = {}
+        self.objects: dict[str, bytes] = {}
 
-    def write(self, key: str, content: str) -> None:
+    def write(self, key: str, content: bytes) -> None:
         self.objects[key] = content
 
-    def read(self, key: str, *, missing_ok: bool = False) -> str | None:
+    def read_bytes(self, key: str, *, missing_ok: bool = False) -> bytes | None:
         return self.objects.get(key)
 
     def delete(self, key: str) -> None:
