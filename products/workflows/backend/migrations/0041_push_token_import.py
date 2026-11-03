@@ -6,8 +6,6 @@ from django.db import migrations, models
 
 import posthog.uuidt
 
-import products.workflows.backend.facade.enums
-
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -39,7 +37,7 @@ class Migration(migrations.Migration):
                             ("cancelled", "Import cancelled"),
                             ("failed", "Import failed"),
                         ],
-                        default=products.workflows.backend.facade.enums.PushTokenImportStatus["RUNNING"],
+                        default="running",
                         max_length=20,
                     ),
                 ),
