@@ -28,6 +28,7 @@ export function TransactionalEmailActivitySummary({
                 {pluralize(eventCount, 'event')} after the email
                 {sessionCount > 0 ? ` across ${pluralize(sessionCount, 'session')}` : ''}
             </LemonTag>
+            {outcomes.length > 0 && <span className="text-xs text-secondary">Then did</span>}
             {outcomes.slice(0, MAX_OUTCOMES).map((outcome) => (
                 <LemonTag key={outcome} type="warning" icon={<IconBolt />}>
                     {outcome}

@@ -94,15 +94,23 @@ export type ActivityRow =
     | ActivityOtherEmailRow
     | { kind: 'emailGroup'; key: string; at: string; rows: ActivityEmailRow[] }
 
+export interface ActivityTimeline {
+    /** What the person did before the email went out. */
+    before: ActivityRow[]
+    /** The email's own steps, then what the person did after it went out. */
+    after: ActivityRow[]
+}
+
 /**
- * One timeline of the person's events, this email's steps, and their other emails, in time order. A row starts each
- * session, the email's consecutive steps fold into one block, and repeats of one interaction fold into one row.
+ * The person's events, this email's steps and their other emails, in time order and split at the send. A row starts
+ * each session, the email's consecutive steps fold into one block, and repeats of one interaction fold into one row.
  */
-export function buildActivityRows(
+export function buildActivityTimeline(
     events: ActivityEvent[],
     emailEvents: TransactionalEmailLogEventApi[],
-    otherEmails: TransactionalEmailLogEntryApi[]
-): ActivityRow[] {
+    otherEmails: TransactionalEmailLogEntryApi[],
+    sentAt: string
+): ActivityTimeline {
     const merged: (ActivityEventRow | ActivityEmailRow | ActivityOtherEmailRow)[] = [
         ...events.map(
             (event): ActivityEventRow => ({ kind: 'event', key: event.uuid, at: event.timestamp, event, count: 1 })
@@ -125,6 +133,16 @@ export function buildActivityRows(
         ),
     ].sort((a, b) => dayjs(a.at).valueOf() - dayjs(b.at).valueOf())
 
+    const sent = dayjs(sentAt)
+    const isBefore = (row: ActivityEventRow | ActivityEmailRow | ActivityOtherEmailRow): boolean =>
+        row.kind !== 'email' && dayjs(row.at).isBefore(sent)
+    return {
+        before: foldRows(merged.filter(isBefore)),
+        after: foldRows(merged.filter((row) => !isBefore(row))),
+    }
+}
+
+function foldRows(merged: (ActivityEventRow | ActivityEmailRow | ActivityOtherEmailRow)[]): ActivityRow[] {
     const rows: ActivityRow[] = []
     let currentSession: string | null = null
     for (const row of merged) {
@@ -141,7 +159,6 @@ export function buildActivityRows(
             rows.push(row)
             continue
         }
-        // A run of the same interaction, such as typing into one field, reads as one row.
         if (
             last?.kind === 'event' &&
             last.event.event === row.event.event &&
@@ -171,7 +188,7 @@ export function relativeToSend(at: string, sentAt: string): string {
 }
 
 export interface ActivityAfterSummary {
-    /** For example "Came back 3m after clicking", when the person returned after engaging with the email. */
+    /** For example "Back in your app 3m after clicking", when the person returned after engaging with the email. */
     comeback: string | null
     eventCount: number
     sessionCount: number
@@ -187,10 +204,10 @@ export function summarizeAfter(
     const firstReturn = engagement ? after.find((event) => dayjs(event.timestamp).isAfter(engagement.at)) : undefined
     const comeback =
         engagement && firstReturn
-            ? `Came back ${humanFriendlyDuration(
+            ? `Back in your app ${humanFriendlyDuration(
                   Math.max(1, dayjs(firstReturn.timestamp).diff(dayjs(engagement.at), 'second')),
                   { maxUnits: 1 }
-              )} after ${engagement.kind === 'clicked' ? 'clicking' : 'opening'}`
+              )} after ${engagement.kind === 'clicked' ? 'clicking the email' : 'opening the email'}`
             : null
     return {
         comeback,

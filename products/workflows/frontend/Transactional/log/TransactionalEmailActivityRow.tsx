@@ -65,7 +65,7 @@ export function TransactionalEmailActivityRow({ row, sentAt }: { row: ActivityRo
     }
     if (row.kind === 'emailGroup') {
         return (
-            <li className="flex flex-col gap-1 my-1 rounded border bg-surface-secondary px-3 py-2">
+            <li className="flex flex-col gap-1 rounded border border-l-2 border-l-accent bg-surface-secondary px-3 py-2">
                 {row.rows.map((emailRow) => {
                     const failed = FAILED_KINDS.includes(emailRow.event.kind)
                     const reason = emailReasonText(emailRow.event.reason)

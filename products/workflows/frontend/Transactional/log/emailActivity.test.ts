@@ -1,4 +1,4 @@
-import { ActivityEvent, buildActivityRows } from './emailActivity'
+import { ActivityEvent, ActivityRow, buildActivityTimeline } from './emailActivity'
 
 function event(uuid: string, timestamp: string, sessionId: string | null): ActivityEvent {
     return {
@@ -13,9 +13,9 @@ function event(uuid: string, timestamp: string, sessionId: string | null): Activ
     }
 }
 
-describe('buildActivityRows', () => {
-    it('interleaves the email between sessions as one block, folds repeats, and keeps other emails in time order', () => {
-        const rows = buildActivityRows(
+describe('buildActivityTimeline', () => {
+    it('splits at the send, starts the after part with the email block, folds repeats, and keeps other emails in order', () => {
+        const timeline = buildActivityTimeline(
             [
                 event('before', '2026-06-15T08:59:00Z', 's1'),
                 event('after-1', '2026-06-15T09:03:00Z', 's2'),
@@ -42,10 +42,11 @@ describe('buildActivityRows', () => {
                     opened: false,
                     clicked: false,
                 },
-            ]
+            ],
+            '2026-06-15T09:00:00Z'
         )
 
-        expect(
+        const shape = (rows: ActivityRow[]): string[] =>
             rows.map((row) =>
                 row.kind === 'emailGroup'
                     ? `emailGroup(${row.rows.length})`
@@ -53,6 +54,7 @@ describe('buildActivityRows', () => {
                       ? `event(${row.count})`
                       : row.kind
             )
-        ).toEqual(['session', 'event(1)', 'emailGroup(3)', 'session', 'event(1)', 'event(2)', 'otherEmail'])
+        expect(shape(timeline.before)).toEqual(['session', 'event(1)'])
+        expect(shape(timeline.after)).toEqual(['emailGroup(3)', 'session', 'event(1)', 'event(2)', 'otherEmail'])
     })
 })
