@@ -4063,11 +4063,17 @@ class IdempotencyKeyReused(Exception):
     pass
 
 
-def find_task_for_idempotency_key(team_id: int, key: str, fingerprint: str) -> contracts.TaskDetailDTO | None:
+def find_task_for_idempotency_key(
+    team_id: int, user_id: int | None, key: str, fingerprint: str
+) -> contracts.TaskDetailDTO | None:
     task = Task.objects.filter(idempotency_key_q(key), team_id=team_id).first()
     if task is None:
         return None
-    if task.deleted or (task.state or {}).get(PUBLIC_CREATE_FINGERPRINT_STATE_KEY) != fingerprint:
+    if (
+        task.deleted
+        or (task.state or {}).get(PUBLIC_CREATE_FINGERPRINT_STATE_KEY) != fingerprint
+        or not _visible_task_qs(team_id, user_id).filter(pk=task.pk).exists()
+    ):
         raise IdempotencyKeyReused(key)
     return _task_detail_to_dto(_task_detail_queryset().get(pk=task.pk))
 

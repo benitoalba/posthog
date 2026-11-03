@@ -7219,6 +7219,20 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
 
         self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
 
+    def test_reusing_a_key_after_the_task_was_handed_off_is_refused(self) -> None:
+        recipient = self.create_organization_user("recipient")
+        first = self._create(profile="test.public", idempotency_key="retry-4")
+        handoff = self.client.post(
+            f"/api/projects/@current/tasks/{first.json()['id']}/handoff/", {"user": recipient.id}, format="json"
+        )
+
+        second = self._create(profile="test.public", idempotency_key="retry-4")
+
+        self.assertEqual(handoff.status_code, status.HTTP_200_OK, handoff.json())
+        self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(second.json()["code"], "idempotency_key_reused")
+        self.assertNotIn("id", second.json())
+
     def test_keys_belong_to_the_user_who_sent_them(self) -> None:
         first = self._create(profile="test.public", idempotency_key="shared")
         self.client.force_authenticate(self.create_organization_user())

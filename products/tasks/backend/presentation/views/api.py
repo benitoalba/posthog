@@ -991,7 +991,7 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
             return None
         try:
             existing = tasks_facade.find_task_for_idempotency_key(
-                self.team_id, idempotency_key, validated_data["idempotency_fingerprint"]
+                self.team_id, self._user_id(), idempotency_key, validated_data["idempotency_fingerprint"]
             )
         except tasks_facade.IdempotencyKeyReused:
             return Response(
