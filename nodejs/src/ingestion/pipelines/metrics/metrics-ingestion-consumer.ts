@@ -7,7 +7,6 @@ import { RedisV2 } from '~/common/redis/redis-v2'
 import { AppMetricsAggregator } from '~/common/services/app-metrics-aggregator'
 import { QuotaLimiting } from '~/common/services/quota-limiting.service'
 import { instrumentFn, instrumented } from '~/common/tracing/tracing-utils'
-import { UsageRecordBatch } from '~/common/usage-ingestion/usage-record-batch'
 import { isDevEnv } from '~/common/utils/env-utils'
 import { logger } from '~/common/utils/logger'
 import { TeamManager } from '~/common/utils/team-manager'
@@ -26,7 +25,6 @@ import {
     metricsRecordsReceivedCounter,
 } from './metrics'
 import { DEFAULT_USAGE_STATS, UsageStatsByTeam } from './metrics-usage'
-import { addMetricsUsageRecords } from './metrics-usage-steps'
 import {
     DEFAULT_METRICS_RETENTION_DAYS,
     METRICS_DLQ_OUTPUT,
@@ -48,7 +46,6 @@ export interface MetricsIngestionConsumerDeps {
      * directly.
      */
     outputs: IngestionOutputs<MetricsOutput | MetricsDlqOutput | AppMetricsOutput>
-    usageBatch: UsageRecordBatch
 }
 
 /** Replaced by `MetricsPipelineConsumer`. Remove it when every environment sets `METRICS_INGESTION_USE_PIPELINE_FRAMEWORK`. */
@@ -310,17 +307,12 @@ export class MetricsIngestionConsumer {
             this.queueUsageMetric(teamId, 'records_dropped', stats.recordsDropped)
         }
 
-        addMetricsUsageRecords(this.deps.usageBatch, usageStats)
-
         // Best-effort: don't let metric failures block ingestion
-        await Promise.all([
-            this.appMetricsAggregator.flush().catch((error) => {
-                logger.error('🔴', 'Failed to emit usage metrics - billing data may be lost', { error })
-            }),
-            this.deps.usageBatch.flush().catch((error) => {
-                logger.error('🔴', 'Failed to emit usage records - billing data may be lost', { error })
-            }),
-        ])
+        try {
+            await this.appMetricsAggregator.flush()
+        } catch (error) {
+            logger.error('🔴', 'Failed to emit usage metrics - billing data may be lost', { error })
+        }
     }
 
     private queueUsageMetric(teamId: number, metricName: string, count: number): void {

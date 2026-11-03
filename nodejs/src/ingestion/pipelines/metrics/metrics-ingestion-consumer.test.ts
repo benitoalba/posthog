@@ -10,7 +10,6 @@ import {
 import { APP_METRICS_OUTPUT, AppMetricsOutput } from '~/common/outputs'
 import { IngestionOutputs } from '~/common/outputs/ingestion-outputs'
 import { SingleIngestionOutput } from '~/common/outputs/single-ingestion-output'
-import { UsageRecordBatch } from '~/common/usage-ingestion/usage-record-batch'
 import { closeHub, createHub } from '~/common/utils/db/hub'
 import { createTeam, createTestTeamFixture, getTeam } from '~/tests/helpers/sql'
 import { Hub, Team } from '~/types'
@@ -72,7 +71,6 @@ describe('MetricsIngestionConsumer', () => {
                     'test'
                 ),
             }),
-            usageBatch: new UsageRecordBatch(null, { unit: 'bytes', isTeamEnabled: () => false }),
         })
         // NOTE: We don't actually use kafka so we skip instantiation for faster tests
         consumer['kafkaConsumer'] = {
