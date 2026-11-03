@@ -1,3 +1,4 @@
+import { strictLocalMatches } from 'lib/components/CommandKSearch/commandKRanking'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { terminalDockLogic } from 'scenes/terminal/terminalDockLogic'
@@ -53,6 +54,39 @@ describe('searchListsLogic', () => {
         const matches = filterSearchItems(logic.values.miscItems, query)
 
         expect(matches.find((item) => item.id === 'misc-my-tickets')?.href).toBe(urls.myTickets())
+    })
+
+    it.each([
+        ['project general', 'settings-project-details', true],
+        ['2fa', 'settings-user-profile-2fa', true],
+        ['rename project', 'settings-project-customization-display-name', false],
+    ])('finds the setting row %s', (query, id, ranked) => {
+        const component = {} as JSX.Element
+        logic.actions.setSettingsSections([
+            {
+                id: 'environment-details',
+                level: 'environment',
+                title: 'General',
+                settings: [{ id: 'variables', title: 'Project token & ID', component }],
+            },
+            {
+                id: 'environment-customization',
+                level: 'environment',
+                title: 'Customization',
+                settings: [{ id: 'display-name', title: 'Project details', keywords: ['rename'], component }],
+            },
+            {
+                id: 'user-profile',
+                level: 'user',
+                title: 'Profile',
+                settings: [{ id: '2fa', title: 'Two-factor authentication', component }],
+            },
+        ])
+        const items = logic.values.settingsItems
+
+        expect(filterSearchItems(items, query).map((item) => item.id)).toContain(id)
+        const strictIds = strictLocalMatches(items, query).map((item) => item.id)
+        expect(ranked ? strictIds : [id]).toContain(id)
     })
 
     it('shows only the Inbox Scouts destination', () => {
