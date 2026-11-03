@@ -462,15 +462,15 @@ pub fn stored_event<'k>(
                     Some(json) => {
                         let edits =
                             slot_edits(json, (0, json.len()), &mut field_slots, sink, edit)?;
-                        Some(edited(json, (0, json.len()), &edits).unwrap_or_else(|| json.clone()))
+                        Some(
+                            edited(json, (0, json.len()), &edits)
+                                .map_or(Cow::Borrowed(&json[..]), Cow::Owned),
+                        )
                     }
                     None if field_slots.next().is_some() => return Err(SlotMismatch),
                     None => None,
                 };
-                decoded.push(Decoded {
-                    span: field.span,
-                    json,
-                });
+                decoded.push((field.span, json));
             }
             if slots.iter().any(|slot| {
                 matches!(slot.buffer, Buffer::Decoded(span) if !fields.iter().any(|f| f.span == span))
@@ -592,13 +592,19 @@ fn write_object(
     out.push(b'}');
 }
 
-fn expanded(inner: &[u8], event: &Event, fields: &[Decoded], inner_edits: &[Edit]) -> Vec<u8> {
+/// `fields` holds each compressed string's span and the JSON it decodes to, with its slots replaced.
+fn expanded(
+    inner: &[u8],
+    event: &Event,
+    fields: &[(Span, Option<Cow<'_, [u8]>>)],
+    inner_edits: &[Edit],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(event.span.1 - event.span.0);
     let json = |span: Span| {
         fields
             .iter()
-            .find(|f| f.span == span)
-            .map(|f| f.json.as_deref())
+            .find(|(field, _)| *field == span)
+            .map(|(_, json)| json.as_deref())
     };
     write_object(inner, event.span, &mut out, |key, value, out| {
         if key == b"cv" {

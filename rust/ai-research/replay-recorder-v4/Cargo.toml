@@ -20,7 +20,6 @@ lifecycle = { path = "../../common/lifecycle" }
 posthog-replay-anonymizer = { path = "../../replay-anonymizer", default-features = false }
 replay-core-v4 = { path = "../replay-core-v4" }
 
-aho-corasick = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }

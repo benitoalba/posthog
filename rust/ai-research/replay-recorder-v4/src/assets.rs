@@ -4,7 +4,7 @@
 //! a marker that names why the policy declines it, so that no credential, signature or private host stays in the block,
 //! and an inline image becomes its `image:v4` reference.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use metrics::counter;
 use posthog_replay_anonymizer::v4_image_refs::{
@@ -15,7 +15,7 @@ use replay_core_v4::inspect::css::{rewrite_css, CssRewriteCounts};
 use replay_core_v4::inspect::srcset::rewrite_srcset;
 use replay_core_v4::scan::images::{inline_image, is_data_url, ImageSink, InlineImage};
 use replay_core_v4::seal::image_url_key;
-use replay_core_v4::url_policy::is_remote;
+use replay_core_v4::url_policy::{is_remote, MAX_URL_LEN};
 
 use crate::urls::url_reference;
 
@@ -69,10 +69,23 @@ impl PassCounters {
     }
 }
 
+/// The remote URLs one block remembers the decision for. A page repeats an image URL in many slots, and each decision
+/// parses and hashes the URL. A URL longer than the fetcher takes is not kept, so the cache holds a few MiB at most.
+const MAX_REMEMBERED_URLS: usize = 4096;
+
+/// What a remote URL becomes, and the labels it counts under.
+#[derive(Clone)]
+struct Decision {
+    text: String,
+    outcome: &'static str,
+    reason: &'static str,
+}
+
 pub struct AssetRewrite {
     team_id: i64,
     key_month: String,
     url_key: [u8; 32],
+    decisions: HashMap<String, Decision>,
     pub counters: PassCounters,
 }
 
@@ -83,6 +96,7 @@ impl AssetRewrite {
             team_id,
             key_month: key_month.to_owned(),
             url_key: image_url_key(team_key),
+            decisions: HashMap::new(),
             counters: PassCounters::default(),
         }
     }
@@ -134,23 +148,39 @@ impl AssetRewrite {
         if !is_remote(url) {
             return None;
         }
-        let (text, outcome, reason) =
-            match url_reference(url, self.team_id, &self.key_month, &self.url_key) {
-                Ok((_, reference)) => (reference, "rewritten", "none"),
-                Err(decline) => (
-                    url_declined_marker(decline.into()),
-                    "declined",
-                    decline.label(),
-                ),
-            };
+        let decision = match self.decisions.get(url) {
+            Some(known) => known.clone(),
+            None => {
+                let decision = self.decide(url);
+                if url.len() <= MAX_URL_LEN && self.decisions.len() < MAX_REMEMBERED_URLS {
+                    self.decisions.insert(url.to_owned(), decision.clone());
+                }
+                decision
+            }
+        };
         *self
             .counters
             .url_rewrites
-            .entry((outcome, reason))
+            .entry((decision.outcome, decision.reason))
             .or_default() += 1;
         Some(Replacement {
-            declined: outcome == "declined",
-            text,
+            declined: decision.outcome == "declined",
+            text: decision.text,
         })
+    }
+
+    fn decide(&self, url: &str) -> Decision {
+        match url_reference(url, self.team_id, &self.key_month, &self.url_key) {
+            Ok((_, reference)) => Decision {
+                text: reference,
+                outcome: "rewritten",
+                reason: "none",
+            },
+            Err(decline) => Decision {
+                text: url_declined_marker(decline.into()),
+                outcome: "declined",
+                reason: decline.label(),
+            },
+        }
     }
 }

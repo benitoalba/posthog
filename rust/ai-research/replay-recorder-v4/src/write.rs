@@ -838,6 +838,21 @@ mod tests {
                 );
             }
         }
+        // A picture source's srcset and a CSSOM sheet are read apart from other attributes, and keep no copy either.
+        for events in [
+            format!(
+                r#"[{{"type":2,"timestamp":1,"data":{{"node":{{"type":0,"id":1,"childNodes":[{{"type":2,"tagName":"picture","attributes":{{}},"id":2,"childNodes":[{{"type":2,"tagName":"source","attributes":{{"srcset":"{signed} 1x","srcset":"{public} 1x"}},"childNodes":[],"id":3}}]}}]}}}}}}]"#
+            ),
+            format!(
+                r#"[{{"type":3,"timestamp":1,"data":{{"source":8,"id":3,"replaceSync":".a{{background:url({signed})}}","replaceSync":".a{{background:url({public})}}"}}}}]"#
+            ),
+        ] {
+            let lines = stored_lines(&events);
+            assert!(
+                lines.contains(&reference) && !lines.contains("X-Amz-Signature"),
+                "{lines}"
+            );
+        }
         // Text outside an image slot stays as the page wrote it, even where it holds the slot's URL.
         let events = json!([{"type": 3, "timestamp": 1, "data": {"source": 0, "adds": [], "removes": [], "texts": [],
             "attributes": [{"id": 99, "attributes": {"src": signed, "alt": format!("{signed}&size=2")}}]}}])

@@ -10,9 +10,10 @@ use url::Url;
 use crate::bytescan::{self as scan, Span};
 use crate::url_policy::{is_fetched_image_type, is_remote, MAX_URL_LEN};
 
+use super::assets::MAX_BLOCK_ASSET_SLOTS;
 use super::assets::{AssetContext, Buffer};
-use super::css::{self, CssKind, CssRewriteCounts};
-use super::events::{field, fields, number, text};
+use super::css::{self, CssKind};
+use super::events::{field, field_copies, fields, number, text};
 use super::rrweb::{
     ADOPTED_STYLE_SHEET, FULL_SNAPSHOT, INCREMENTAL_SNAPSHOT, MUTATION, STYLE_DECLARATION,
     STYLE_SHEET_RULE,
@@ -230,6 +231,18 @@ pub struct DomInspector {
     lost: bool,
     urls: Urls,
     slots: Vec<Slot>,
+    slot_room: SlotRoom,
+    over_slot_room: bool,
+}
+
+/// The slots the events of the current block may still record.
+#[derive(Clone, Copy)]
+struct SlotRoom(usize);
+
+impl Default for SlotRoom {
+    fn default() -> Self {
+        Self(MAX_BLOCK_ASSET_SLOTS)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -247,6 +260,9 @@ struct Walk {
     buffer: Buffer,
     page_base: Option<Arc<Url>>,
     slots: Vec<Slot>,
+    /// The slots the block still has room for, and whether the walk found more.
+    slot_room: usize,
+    over_slot_room: bool,
     /// Each node and its parent. A root's parent is `None`.
     ids: Vec<(i64, Option<i64>)>,
     /// The walk met more nodes than the node cap, so `ids` stops short.
@@ -265,7 +281,7 @@ struct Walk {
     hidden: Vec<(i64, HiddenSources)>,
     /// `source` elements that are a walk's root, with their srcset. Whether each is a picture source depends on the
     /// parent that the mutation names.
-    root_sources: Vec<(Option<i64>, Option<Span>, Option<Span>)>,
+    root_sources: Vec<(Option<i64>, Vec<Span>, Option<Span>)>,
 }
 
 impl Walk {
@@ -281,7 +297,15 @@ impl Walk {
     fn slot(&mut self, bytes: &[u8], value: Option<Span>, context: AssetContext) {
         let Some(span) = value else { return };
         if text(bytes, Some(span)).is_some_and(|text| context.may_hold_asset(&text)) {
+            self.push_slot(span, context);
+        }
+    }
+
+    fn push_slot(&mut self, span: Span, context: AssetContext) {
+        if self.slots.len() < self.slot_room {
             self.slots.push((self.buffer, span, context));
+        } else {
+            self.over_slot_room = true;
         }
     }
 
@@ -305,10 +329,13 @@ impl Walk {
 
     /// A picture source of a type the fetcher does not store gets no fetch job, and the writer empties its srcset, so
     /// the browser falls back to the next source or the img.
-    fn push_source(&mut self, bytes: &[u8], srcset: Option<Span>, unfetched_type: bool) {
+    /// `srcsets` holds every copy of the source's srcset. The last one is the one the player reads.
+    fn push_source(&mut self, bytes: &[u8], srcsets: &[Span], unfetched_type: bool) {
         let slot = source_slot(unfetched_type);
-        self.slot(bytes, srcset, AssetContext::Srcset(slot));
-        self.fetch_srcset(bytes, srcset, slot);
+        for &srcset in srcsets {
+            self.slot(bytes, Some(srcset), AssetContext::Srcset(slot));
+        }
+        self.fetch_srcset(bytes, srcsets.last().copied(), slot);
     }
 
     /// CSS text, or a style diff: an object of properties, each with a value or a `[value, priority]` pair.
@@ -337,20 +364,12 @@ impl Walk {
         };
         let page_base = self.page_base.clone();
         let image_urls = &mut self.image_urls;
-        css::rewrite_css(
-            &css,
-            kind,
-            page_base.as_deref(),
-            &mut |image| {
-                if image.shown {
-                    image_urls.push(image.url);
-                }
-                None
-            },
-            &mut CssRewriteCounts::default(),
-        );
-        self.slots
-            .push((self.buffer, span, AssetContext::Css { kind, page_base }));
+        css::css_image_urls(&css, kind, page_base.as_deref(), &mut |image| {
+            if image.shown {
+                image_urls.push(image.url);
+            }
+        });
+        self.push_slot(span, AssetContext::Css { kind, page_base });
     }
 }
 
@@ -466,6 +485,10 @@ impl Attributes {
             .filter(move |(earlier, _)| *earlier == attribute)
             .map(|&(_, span)| span)
             .chain(last)
+    }
+
+    fn srcset_copies(&self) -> Vec<Span> {
+        self.copies(AssetAttribute::Srcset, self.srcset).collect()
     }
 
     fn slot_copies(
@@ -677,7 +700,7 @@ struct NodeFrame {
     /// Child text, and child `source` elements with their srcset, which count only under a `style` or a `picture`.
     /// They wait here because the tag can come after the children.
     child_texts: Vec<(Option<i64>, Span)>,
-    child_sources: Vec<(Option<i64>, Option<Span>, Option<Span>)>,
+    child_sources: Vec<(Option<i64>, Vec<Span>, Option<Span>)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -775,11 +798,11 @@ fn finish_node(bytes: &[u8], node: NodeFrame, parent: Option<&mut NodeFrame>, wa
         }
     }
     if node.tag == Tag::Picture {
-        for &(id, srcset, source_type) in &node.child_sources {
-            let unfetched_type = is_unfetched_type(bytes, source_type);
+        for (id, srcsets, source_type) in &node.child_sources {
+            let unfetched_type = is_unfetched_type(bytes, *source_type);
             walk.media
                 .extend(id.map(|id| (id, Media::PictureSource { unfetched_type })));
-            walk.push_source(bytes, srcset, unfetched_type);
+            walk.push_source(bytes, srcsets, unfetched_type);
         }
     }
     match node.id {
@@ -845,7 +868,7 @@ fn finish_node(bytes: &[u8], node: NodeFrame, parent: Option<&mut NodeFrame>, wa
             if node.tag == Tag::Source {
                 parent.child_sources.push((
                     node.id,
-                    node.attributes.srcset,
+                    node.attributes.srcset_copies(),
                     node.attributes.source_type,
                 ));
             }
@@ -857,7 +880,7 @@ fn finish_node(bytes: &[u8], node: NodeFrame, parent: Option<&mut NodeFrame>, wa
             if node.tag == Tag::Source {
                 walk.root_sources.push((
                     node.id,
-                    node.attributes.srcset,
+                    node.attributes.srcset_copies(),
                     node.attributes.source_type,
                 ));
             }
@@ -871,7 +894,10 @@ enum Snapshot {
     Dropped,
     /// It does not decode or is too deep to walk, and the player may still build a DOM from a payload this deep. The
     /// block stores it, so the asset slots found before the walk stopped still count.
-    Unreadable(Vec<Slot>),
+    Unreadable {
+        slots: Vec<Slot>,
+        over_slot_room: bool,
+    },
     Walked(Box<Walk>),
 }
 
@@ -881,15 +907,20 @@ fn walk_snapshot(
     data: Span,
     expansion: &Expansion,
     page_base: Option<Arc<Url>>,
+    slot_room: usize,
 ) -> Snapshot {
+    let unreadable = || Snapshot::Unreadable {
+        slots: Vec::new(),
+        over_slot_room: false,
+    };
     let (bytes, root, buffer) = if scan::is_string(inner, data) {
         match expansion.json(data) {
             Some(Some(json)) => match scan::locate_value(json, 0) {
                 Ok(root) => (json, root, Buffer::Decoded(data)),
-                Err(_) => return Snapshot::Unreadable(Vec::new()),
+                Err(_) => return unreadable(),
             },
             Some(None) => return Snapshot::Dropped,
-            None => return Snapshot::Unreadable(Vec::new()),
+            None => return unreadable(),
         }
     } else {
         (inner, data, Buffer::Inner)
@@ -901,12 +932,16 @@ fn walk_snapshot(
     let mut walk = Walk {
         buffer,
         page_base,
+        slot_room,
         ..Walk::default()
     };
     if walk_nodes(bytes, node, &mut walk) {
         Snapshot::Walked(Box::new(walk))
     } else {
-        Snapshot::Unreadable(walk.slots)
+        Snapshot::Unreadable {
+            slots: walk.slots,
+            over_slot_room: walk.over_slot_room,
+        }
     }
 }
 
@@ -1137,13 +1172,14 @@ impl DomInspector {
             dom.page_base = css::page_base(page_url).map(Arc::new);
         }
         let page_base = dom.page_base.clone();
+        let slot_room = self.slot_room.0.saturating_sub(self.slots.len());
         let mut observed = Observed::default();
         match (event.kind, event.source) {
             (Some(FULL_SNAPSHOT), _) => {
                 let expansion = cv::expansion(inner, event);
                 let last_used = dom.last_used;
                 match event.data.map_or(Snapshot::Dropped, |data| {
-                    walk_snapshot(inner, data, &expansion, page_base.clone())
+                    walk_snapshot(inner, data, &expansion, page_base.clone(), slot_room)
                 }) {
                     Snapshot::Walked(mut walk) => {
                         // A full snapshot replaces the window's DOM.
@@ -1171,11 +1207,16 @@ impl DomInspector {
                         stats.shadow_roots += walk.shadow_roots;
                         self.urls.merge(std::mem::take(&mut walk.image_urls));
                         self.slots.append(&mut walk.slots);
+                        self.over_slot_room |= walk.over_slot_room;
                         self.seen_snapshot = true;
                         observed.full_snapshot = true;
                     }
-                    Snapshot::Unreadable(mut slots) => {
+                    Snapshot::Unreadable {
+                        mut slots,
+                        over_slot_room,
+                    } => {
                         self.slots.append(&mut slots);
+                        self.over_slot_room |= over_slot_room;
                         stats.decode_failures += 1;
                         *dom = WindowDom {
                             unverifiable: true,
@@ -1191,15 +1232,16 @@ impl DomInspector {
             (Some(INCREMENTAL_SNAPSHOT), Some(MUTATION)) => {
                 if let Some(data) = event.data {
                     let expansion = cv::expansion(inner, event);
-                    let (orphans, changed, undecoded) = observe_mutation(
-                        inner,
-                        data,
-                        &expansion,
-                        dom,
+                    let mut walk = Walk {
                         page_base,
-                        &mut self.urls,
-                        &mut self.slots,
-                    );
+                        slot_room,
+                        ..Walk::default()
+                    };
+                    let (orphans, changed, undecoded) =
+                        observe_mutation(inner, data, &expansion, dom, &mut walk);
+                    self.urls.merge(walk.image_urls);
+                    self.slots.append(&mut walk.slots);
+                    self.over_slot_room |= walk.over_slot_room;
                     stats.orphan_mutations += orphans;
                     stats.decode_failures += u32::from(undecoded);
                     observed.changed = changed;
@@ -1214,9 +1256,15 @@ impl DomInspector {
                     if matches!(*expansion, Expansion::Failed | Expansion::Skipped) {
                         stats.decode_failures += 1;
                     }
-                    let walk = style_sheet_assets(inner, data, event.source, &expansion, page_base);
+                    let mut walk = Walk {
+                        page_base,
+                        slot_room,
+                        ..Walk::default()
+                    };
+                    style_sheet_assets(inner, data, event.source, &expansion, &mut walk);
                     self.urls.merge(walk.image_urls);
-                    self.slots.extend(walk.slots);
+                    self.slots.append(&mut walk.slots);
+                    self.over_slot_room |= walk.over_slot_room;
                 }
             }
             _ => {}
@@ -1236,6 +1284,16 @@ impl DomInspector {
     /// The asset strings that the events since the last call hold, for the writer to replace.
     pub fn take_asset_slots(&mut self) -> Vec<Slot> {
         std::mem::take(&mut self.slots)
+    }
+
+    /// Bounds the slots the next events record to the room their block has left.
+    pub fn set_slot_room(&mut self, room: usize) {
+        self.slot_room = SlotRoom(room);
+    }
+
+    /// Whether an event since the last call held more slots than the room, so its block must not be stored.
+    pub fn take_slot_overflow(&mut self) -> bool {
+        std::mem::take(&mut self.over_slot_room)
     }
 
     /// Whether a full snapshot of any window of the session decoded in this process.
@@ -1361,9 +1419,7 @@ fn observe_mutation(
     data: Span,
     expansion: &Expansion,
     dom: &mut WindowDom,
-    page_base: Option<Arc<Url>>,
-    urls: &mut Urls,
-    slots: &mut Vec<Slot>,
+    walk: &mut Walk,
 ) -> (u32, u32, bool) {
     // The recorder did not decode this mutation, so the window's DOM is not known after it.
     if matches!(expansion, Expansion::Skipped) {
@@ -1375,10 +1431,6 @@ fn observe_mutation(
         return (0, 0, true);
     }
     let mut undecoded = false;
-    let mut walk = Walk {
-        page_base,
-        ..Walk::default()
-    };
     let mut adds = Vec::new();
     if let Some(list) = lists.adds {
         walk.buffer = list.buffer;
@@ -1389,7 +1441,7 @@ fn observe_mutation(
             let first = walk.ids.len();
             if let Some(node) = node {
                 let first_source = walk.root_sources.len();
-                if !walk_nodes(list.bytes, node, &mut walk) {
+                if !walk_nodes(list.bytes, node, walk) {
                     dom.unverifiable = true;
                     undecoded = true;
                 }
@@ -1410,13 +1462,13 @@ fn observe_mutation(
                 .filter(|(_, media)| *media == Media::Picture)
                 .map(|&(id, _)| id)
                 .collect();
-            for (parent, (id, srcset, source_type)) in sources {
+            for (parent, (id, srcsets, source_type)) in sources {
                 let Some(parent) = parent else { continue };
                 if pictures.contains(&parent) || dom.media.get(&parent) == Some(&Media::Picture) {
                     let unfetched_type = is_unfetched_type(list.bytes, source_type);
                     walk.media
                         .extend(id.map(|id| (id, Media::PictureSource { unfetched_type })));
-                    walk.push_source(list.bytes, srcset, unfetched_type);
+                    walk.push_source(list.bytes, &srcsets, unfetched_type);
                 }
             }
         }
@@ -1427,9 +1479,11 @@ fn observe_mutation(
     if let Some(texts) = lists.texts {
         walk.buffer = texts.buffer;
         for item in items(texts) {
-            let [id, value] = fields(texts.bytes, item, [b"id", b"value"]);
+            let id = field(texts.bytes, item, b"id");
             if number(texts.bytes, id).is_some_and(|id| dom.style_texts.contains(&(id as i64))) {
-                walk.push_css(texts.bytes, value);
+                for value in field_copies(texts.bytes, item, b"value") {
+                    walk.push_css(texts.bytes, Some(value));
+                }
             }
         }
     }
@@ -1468,7 +1522,7 @@ fn observe_mutation(
                     }
                     Some((id, true, false)) => {
                         if let Some(sources) = dom.set_hidden_sources(id, None) {
-                            sources.push_revealed(attributes.bytes, &values, &mut walk);
+                            sources.push_revealed(attributes.bytes, &values, walk);
                         }
                     }
                     _ => {}
@@ -1476,14 +1530,12 @@ fn observe_mutation(
                 let known =
                     id.is_some_and(|id| dom.nodes.contains_key(&id) || walked.contains(&id));
                 if media.is_none() && !known {
-                    values.push_unknown_sources(attributes.bytes, &mut walk);
+                    values.push_unknown_sources(attributes.bytes, walk);
                 }
-                values.push_assets(attributes.bytes, media, &mut walk);
+                values.push_assets(attributes.bytes, media, walk);
             }
         }
     }
-    urls.merge(std::mem::take(&mut walk.image_urls));
-    slots.append(&mut walk.slots);
     if walk.truncated {
         dom.unverifiable = true;
     }
@@ -1555,53 +1607,56 @@ fn style_sheet_assets(
     data: Span,
     source: Option<u8>,
     expansion: &Expansion,
-    page_base: Option<Arc<Url>>,
-) -> Walk {
-    let mut walk = Walk {
-        page_base,
-        ..Walk::default()
-    };
+    walk: &mut Walk,
+) {
     match source {
         Some(STYLE_SHEET_RULE) => {
-            let [adds, replace, replace_sync] =
-                fields(inner, data, [b"adds", b"replace", b"replaceSync"]);
+            let adds = field(inner, data, b"adds");
             if let Some(adds) = adds.and_then(|adds| decoded_list(inner, adds, expansion)) {
                 walk.buffer = adds.buffer;
                 for item in items(adds) {
-                    walk.push_css(adds.bytes, field(adds.bytes, item, b"rule"));
+                    for rule in field_copies(adds.bytes, item, b"rule") {
+                        walk.push_css(adds.bytes, Some(rule));
+                    }
                 }
                 walk.buffer = Buffer::Inner;
             }
-            for sheet in [replace, replace_sync] {
-                walk.push_css(inner, sheet);
+            for key in [&b"replace"[..], b"replaceSync"] {
+                for sheet in field_copies(inner, data, key) {
+                    walk.push_css(inner, Some(sheet));
+                }
             }
         }
         Some(STYLE_DECLARATION) => {
             let set = field(inner, data, b"set");
-            let [property, value] =
-                set.map_or([None; 2], |set| fields(inner, set, [b"property", b"value"]));
-            if let (Some(property), Some(value)) = (text(inner, property), value) {
-                if css::can_hold_image(&property) && scan::is_string(inner, value) {
-                    walk.push_css_string(inner, value, CssKind::Value);
+            let property = set.and_then(|set| text(inner, field(inner, set, b"property")));
+            if let (Some(set), Some(property)) = (set, property) {
+                if css::can_hold_image(&property) {
+                    for value in field_copies(inner, set, b"value") {
+                        if scan::is_string(inner, value) {
+                            walk.push_css_string(inner, value, CssKind::Value);
+                        }
+                    }
                 }
             }
         }
         Some(ADOPTED_STYLE_SHEET) => {
             let Some(styles) = field(inner, data, b"styles") else {
-                return walk;
+                return;
             };
             for style in items(List::inner(inner, styles)) {
                 let Some(rules) = field(inner, style, b"rules") else {
                     continue;
                 };
                 for rule in items(List::inner(inner, rules)) {
-                    walk.push_css(inner, field(inner, rule, b"rule"));
+                    for text in field_copies(inner, rule, b"rule") {
+                        walk.push_css(inner, Some(text));
+                    }
                 }
             }
         }
         _ => {}
     }
-    walk
 }
 
 /// A list as the player reads it, decoded when the event compressed it. `None` when it is empty or does not decode.
@@ -2047,6 +2102,20 @@ mod tests {
         assert_eq!(found.len(), MAX_IMAGE_URLS);
         // The cap limits the fetch jobs only. The writer replaces the URL of every img.
         assert_eq!(dom.take_asset_slots().len(), adds.len());
+        // Past its block's slot room the inspector records no more slots, and says so, so the block is not stored.
+        let mut limited = DomInspector::default();
+        limited.set_slot_room(adds.len() - 1);
+        let mut stats = BlockStats::default();
+        for event in &message.events {
+            limited.observe(&message.inner, event, "w", None, &mut stats);
+        }
+        assert_eq!(
+            (
+                limited.take_asset_slots().len(),
+                limited.take_slot_overflow()
+            ),
+            (adds.len() - 1, true)
+        );
         assert_eq!(
             found[..2],
             [

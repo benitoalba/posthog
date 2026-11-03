@@ -99,13 +99,31 @@ impl<'k> ImageSink<'k> {
     }
 
     pub(crate) fn take_base64(&mut self, payload: &[u8]) -> String {
-        if payload.len() > self.limits.max_image_bytes.div_ceil(3) * 4 {
+        if payload.len() > self.max_base64_len() {
             return self.decline(ImageDecline::OverLimit);
         }
         match FORGIVING_BASE64.decode(payload) {
             Ok(bytes) => self.take(bytes),
             Err(_) => self.decline(ImageDecline::Undecodable),
         }
+    }
+
+    /// A base64 payload with whitespace in it, as a data URI can hold one. The cap applies before the copy without it.
+    fn take_base64_text(&mut self, payload: &str) -> String {
+        let is_space = |b: &u8| b.is_ascii_whitespace();
+        let encoded = payload.bytes().filter(|b| !is_space(b)).count();
+        if encoded == payload.len() {
+            return self.take_base64(payload.as_bytes());
+        }
+        if encoded > self.max_base64_len() {
+            return self.decline(ImageDecline::OverLimit);
+        }
+        let clean: Vec<u8> = payload.bytes().filter(|b| !is_space(b)).collect();
+        self.take_base64(&clean)
+    }
+
+    fn max_base64_len(&self) -> usize {
+        self.limits.max_image_bytes.div_ceil(3) * 4
     }
 
     pub(crate) fn decline(&mut self, reason: ImageDecline) -> String {
@@ -336,7 +354,11 @@ pub enum InlineImage {
 /// The one place a data URI becomes a reference, with the rules of v3 `collectable_data_uri_bytes`: the media type and
 /// `base64` in any case, and any parameters before the comma. A base64 payload loses its whitespace, as in a browser.
 pub fn inline_image(data_uri: &str, sink: &mut ImageSink<'_>) -> InlineImage {
+    // A browser reads a data URL without its fragment.
     let data_uri = data_uri.trim();
+    let data_uri = data_uri
+        .split_once('#')
+        .map_or(data_uri, |(before, _)| before);
     let Some((meta, payload)) = data_uri
         .get(5..)
         .filter(|_| is_data_url(data_uri))
@@ -355,25 +377,25 @@ pub fn inline_image(data_uri: &str, sink: &mut ImageSink<'_>) -> InlineImage {
     if subtype.starts_with("svg") {
         return InlineImage::Svg;
     }
-    let base64 = meta.contains("base64");
-    let payload: Vec<u8> = if base64 {
-        payload
-            .bytes()
-            .filter(|b| !b.is_ascii_whitespace())
-            .collect()
-    } else {
-        percent_encoding::percent_decode(payload.as_bytes()).collect()
-    };
-    if payload.is_empty() {
+    if meta.contains("base64") {
+        if payload.bytes().all(|b| b.is_ascii_whitespace()) {
+            return InlineImage::NotImage;
+        }
+        // The label or the bytes can name AVIF, so both count.
+        return InlineImage::Replaced(if subtype.starts_with("avif") {
+            sink.decline(ImageDecline::Avif)
+        } else {
+            sink.take_base64_text(payload)
+        });
+    }
+    let image: Vec<u8> = percent_encoding::percent_decode(payload.as_bytes()).collect();
+    if image.is_empty() {
         return InlineImage::NotImage;
     }
-    // The label or the bytes can name AVIF, so both count.
     InlineImage::Replaced(if subtype.starts_with("avif") {
         sink.decline(ImageDecline::Avif)
-    } else if base64 {
-        sink.take_base64(&payload)
     } else {
-        sink.take(payload)
+        sink.take(image)
     })
 }
 
@@ -653,6 +675,22 @@ mod tests {
                 String::from_utf8_lossy(&out),
                 format!("{before}{}{after}", images.images[0].reference),
                 "{event}"
+            );
+        }
+        // A browser reads a data URL without its fragment, so the fragment is no part of the image.
+        for uri in [
+            format!("data:image/png;base64,{base64}#preview"),
+            format!("data:image/png,{percent}#preview"),
+        ] {
+            let mut images = sink(ImageLimits::default());
+            let replaced = inline_image(&uri, &mut images);
+            assert_eq!(
+                (replaced, &images.images[0].bytes),
+                (
+                    InlineImage::Replaced(images.images[0].reference.clone()),
+                    &image
+                ),
+                "{uri}"
             );
         }
     }

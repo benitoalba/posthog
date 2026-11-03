@@ -85,11 +85,44 @@ pub fn rewrite_css(
     asset: &mut impl FnMut(CssImage<'_>) -> Option<Replacement>,
     counts: &mut CssRewriteCounts,
 ) -> Option<String> {
+    scan_css(css, kind, base, asset, counts, true)
+}
+
+/// Calls `found` with each image URL in `css`, as [`rewrite_css`] finds them, and builds no rewritten text.
+pub fn css_image_urls(
+    css: &str,
+    kind: CssKind,
+    base: Option<&Url>,
+    found: &mut impl FnMut(CssImage<'_>),
+) {
+    let mut asset = |image: CssImage<'_>| {
+        found(image);
+        None
+    };
+    scan_css(
+        css,
+        kind,
+        base,
+        &mut asset,
+        &mut CssRewriteCounts::default(),
+        false,
+    );
+}
+
+fn scan_css(
+    css: &str,
+    kind: CssKind,
+    base: Option<&Url>,
+    asset: &mut impl FnMut(CssImage<'_>) -> Option<Replacement>,
+    counts: &mut CssRewriteCounts,
+    write: bool,
+) -> Option<String> {
     let mut out = Splice::new(css);
     let mut rewrite = Rewrite {
         base,
         asset,
         counts,
+        write,
     };
     match kind {
         CssKind::Text => {
@@ -137,6 +170,8 @@ struct Rewrite<'a, F> {
     base: Option<&'a Url>,
     asset: &'a mut F,
     counts: &'a mut CssRewriteCounts,
+    /// Builds the replacement text. Off, a page cannot make the inspector hold a rewritten copy of its CSS.
+    write: bool,
 }
 
 impl<F: FnMut(CssImage<'_>) -> Option<Replacement>> Rewrite<'_, F> {
@@ -203,10 +238,15 @@ impl<F: FnMut(CssImage<'_>) -> Option<Replacement>> Rewrite<'_, F> {
                 url: &absolute,
                 shown,
             });
-            return Some(url_function(&replaced.map_or(absolute, |r| r.text)));
+            return self
+                .write
+                .then(|| url_function(&replaced.map_or(absolute, |r| r.text)));
         }
         if is_remote(source) || is_data_url(source) {
-            return (self.asset)(CssImage { url: source, shown }).map(|r| url_function(&r.text));
+            let replaced = (self.asset)(CssImage { url: source, shown });
+            return replaced
+                .filter(|_| self.write)
+                .map(|r| url_function(&r.text));
         }
         None
     }
@@ -253,11 +293,11 @@ impl<F: FnMut(CssImage<'_>) -> Option<Replacement>> Rewrite<'_, F> {
         let kept = &candidates[index];
         let source = kept.source.as_deref().unwrap_or_default();
         let url = self.url(source, true);
-        if candidates.len() == 1 && url.is_none() {
-            return None;
-        }
         if candidates.len() > 1 {
             self.counts.image_sets += 1;
+        }
+        if !self.write || (candidates.len() == 1 && url.is_none()) {
+            return None;
         }
         let candidate = match url {
             Some(url) => format!("{url} {}", kept.descriptors.trim())

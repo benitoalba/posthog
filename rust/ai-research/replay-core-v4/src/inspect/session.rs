@@ -53,6 +53,7 @@ pub struct BlockInspection {
     image_urls: Vec<String>,
     assets: Vec<Vec<AssetSlot>>,
     asset_slots: usize,
+    too_many_asset_slots: bool,
     events: u32,
 }
 
@@ -82,7 +83,7 @@ impl BlockInspection {
             moments: self.moments,
             image_urls: self.image_urls,
             assets: self.assets,
-            too_many_asset_slots: self.asset_slots > MAX_BLOCK_ASSET_SLOTS,
+            too_many_asset_slots: self.too_many_asset_slots,
         }
     }
 }
@@ -167,6 +168,8 @@ impl SessionInspector {
         let navigated = block.counter.stats.navigations > navigations;
 
         let waiting = block.counter.stats.events_before_first_full_snapshot;
+        self.dom
+            .set_slot_room(MAX_BLOCK_ASSET_SLOTS.saturating_sub(block.asset_slots));
         let observed = self.dom.observe(
             inner,
             event,
@@ -175,21 +178,21 @@ impl SessionInspector {
             &mut block.counter.stats,
         );
         block.image_urls.extend(self.dom.take_image_urls());
-        for (buffer, span, context) in self.dom.take_asset_slots() {
-            block.asset_slots += 1;
-            if block.asset_slots <= MAX_BLOCK_ASSET_SLOTS {
-                let slots = block
-                    .assets
-                    .last_mut()
-                    .expect("each message pushes its list first");
-                slots.push(AssetSlot {
-                    event: index_in_message,
-                    buffer,
-                    span,
-                    context,
-                });
-            }
+        let found = self.dom.take_asset_slots();
+        block.asset_slots += found.len();
+        let slots = block
+            .assets
+            .last_mut()
+            .expect("each message pushes its list first");
+        for (buffer, span, context) in found {
+            slots.push(AssetSlot {
+                event: index_in_message,
+                buffer,
+                span,
+                context,
+            });
         }
+        block.too_many_asset_slots |= self.dom.take_slot_overflow();
         if observed.full_snapshot {
             self.cold = false;
         }
