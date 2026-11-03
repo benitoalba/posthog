@@ -43,6 +43,10 @@ export const createBodyMemberNoticeOneActionOneLabelMax = 40
 
 export const createBodyMemberNoticeOneActionOneUrlMax = 2000
 
+export const createBodyIpRestrictionsItemMax = 64
+
+export const createBodyIpRestrictionsMax = 100
+
 export const CreateBody = /* @__PURE__ */ zod.object({
     name: zod.string().max(createBodyNameMax),
     logo_media_id: zod.uuid().nullish(),
@@ -117,6 +121,15 @@ export const CreateBody = /* @__PURE__ */ zod.object({
         .uuid()
         .nullish()
         .describe('ID of the role to automatically assign to new members joining the organization'),
+    ip_restrictions: zod
+        .array(zod.string().max(createBodyIpRestrictionsItemMax))
+        .max(createBodyIpRestrictionsMax)
+        .optional()
+        .describe('IP addresses and CIDR blocks allowed to access this organization. Empty means every IP is allowed.'),
+    ip_restrictions_enabled: zod
+        .boolean()
+        .optional()
+        .describe('When False, the IP allowlist is kept but not enforced.'),
 })
 
 export const updateBodyNameMax = 64
@@ -126,6 +139,10 @@ export const updateBodyMemberNoticeOneMessageMax = 1000
 export const updateBodyMemberNoticeOneActionOneLabelMax = 40
 
 export const updateBodyMemberNoticeOneActionOneUrlMax = 2000
+
+export const updateBodyIpRestrictionsItemMax = 64
+
+export const updateBodyIpRestrictionsMax = 100
 
 export const UpdateBody = /* @__PURE__ */ zod.object({
     name: zod.string().max(updateBodyNameMax),
@@ -201,6 +218,15 @@ export const UpdateBody = /* @__PURE__ */ zod.object({
         .uuid()
         .nullish()
         .describe('ID of the role to automatically assign to new members joining the organization'),
+    ip_restrictions: zod
+        .array(zod.string().max(updateBodyIpRestrictionsItemMax))
+        .max(updateBodyIpRestrictionsMax)
+        .optional()
+        .describe('IP addresses and CIDR blocks allowed to access this organization. Empty means every IP is allowed.'),
+    ip_restrictions_enabled: zod
+        .boolean()
+        .optional()
+        .describe('When False, the IP allowlist is kept but not enforced.'),
 })
 
 export const partialUpdateBodyNameMax = 64
@@ -210,6 +236,10 @@ export const partialUpdateBodyMemberNoticeOneMessageMax = 1000
 export const partialUpdateBodyMemberNoticeOneActionOneLabelMax = 40
 
 export const partialUpdateBodyMemberNoticeOneActionOneUrlMax = 2000
+
+export const partialUpdateBodyIpRestrictionsItemMax = 64
+
+export const partialUpdateBodyIpRestrictionsMax = 100
 
 export const PartialUpdateBody = /* @__PURE__ */ zod.object({
     name: zod.string().max(partialUpdateBodyNameMax).optional(),
@@ -285,6 +315,15 @@ export const PartialUpdateBody = /* @__PURE__ */ zod.object({
         .uuid()
         .nullish()
         .describe('ID of the role to automatically assign to new members joining the organization'),
+    ip_restrictions: zod
+        .array(zod.string().max(partialUpdateBodyIpRestrictionsItemMax))
+        .max(partialUpdateBodyIpRestrictionsMax)
+        .optional()
+        .describe('IP addresses and CIDR blocks allowed to access this organization. Empty means every IP is allowed.'),
+    ip_restrictions_enabled: zod
+        .boolean()
+        .optional()
+        .describe('When False, the IP allowlist is kept but not enforced.'),
 })
 
 export const MembersUpdateBody = /* @__PURE__ */ zod.object({
