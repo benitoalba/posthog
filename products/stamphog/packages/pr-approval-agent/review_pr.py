@@ -183,6 +183,8 @@ def _is_retryable_error(err_msg: str) -> bool:
 # with a bot mid-review, not a lasting state — poll until it clears instead
 # of refusing. Budget must leave room for the LLM review inside the
 # workflow job timeout.
+# The gates a passing attestation can clear: the denies it lifts, and an admitted bot's every-file rule.
+ATTESTATION_GATES = ("deny-list", "attestations")
 BOT_REVIEW_WAIT_BUDGET_SECONDS = 300
 BOT_REVIEW_POLL_SECONDS = 30
 
@@ -327,11 +329,16 @@ class Pipeline:
         return self.pr.author_is_bot and not self.self_driving and self.admitted_bot is None
 
     @property
+    def unattested_files(self) -> list[str]:
+        """The changed files no passing attestation listed. Without a classification, that is every file."""
+        return self.classification.get("unattested_files", self.pr.file_paths)
+
+    @property
     def sized_files(self) -> list[dict]:
         """The files the size gate counts. CI proved an admitted bot's attested files instead."""
         if self.admitted_bot is None:
             return self.pr.files
-        unattested = set(self.classification.get("unattested_files") or [])
+        unattested = set(self.unattested_files)
         return [f for f in self.pr.files if f["filename"] in unattested]
 
     def pending_attestations_clear_every_block(self) -> bool:
@@ -341,13 +348,12 @@ class Pipeline:
         A deny they cannot lift (auth, crypto) won't clear when they report, so it never waits.
         """
         cl = self.classification
-        deny_blocks = bool(cl.get("deny_categories"))
-        file_blocks = self.admitted_bot is not None and bool(cl.get("unattested_files"))
-        return (
-            (deny_blocks or file_blocks)
-            and (not deny_blocks or bool(cl.get("pending_attestations_clear_deny")))
-            and (not file_blocks or bool(cl.get("pending_attestations_attest_every_file")))
-        )
+        clears: list[bool] = []
+        if cl.get("deny_categories"):
+            clears.append(bool(cl.get("pending_attestations_clear_deny")))
+        if self.admitted_bot is not None and self.unattested_files:
+            clears.append(bool(cl.get("pending_attestations_attest_every_file")))
+        return bool(clears) and all(clears)
 
     def _only_pending_attestations(self) -> bool:
         """True when the only thing blocking approval is an attestation that has not reported.
@@ -356,7 +362,7 @@ class Pipeline:
         deny-list one. Other gate failures (size, prerequisites) won't clear when it reports, so we
         shouldn't promise a re-label will help.
         """
-        if any(not r.passed and r.gate not in ("deny-list", "attestations") for r in self.gate_results):
+        if any(not r.passed and r.gate not in ATTESTATION_GATES for r in self.gate_results):
             return False
         return self.pending_attestations_clear_every_block()
 
@@ -486,17 +492,15 @@ class Pipeline:
 
         pending_rules = pending(POLICY.attestations, results, pr.deny_paths)
 
-        def clears_deny(assumed: Iterable[Attestation]) -> bool:
+        def lifted(assumed: Iterable[Attestation]) -> dict[str, frozenset[str]]:
             passing = assume_passing(assumed, results, pr.deny_paths)
-            return bool(deny) and not detect_deny_categories(
-                pr.deny_paths, lifted_files(POLICY.attestations, passing, pr.deny_paths)
-            )
+            return lifted_files(POLICY.attestations, passing, pr.deny_paths)
+
+        def clears_deny(assumed: Iterable[Attestation]) -> bool:
+            return bool(deny) and not detect_deny_categories(pr.deny_paths, lifted(assumed))
 
         def unattested(assumed: Iterable[Attestation]) -> list[str]:
-            passing = assume_passing(assumed, results, pr.deny_paths)
-            listed = {
-                path for files in lifted_files(POLICY.attestations, passing, pr.deny_paths).values() for path in files
-            }
+            listed = {path for files in lifted(assumed).values() for path in files}
             return sorted(set(pr.deny_paths) - listed)
 
         exception_lifted = bool(POLICY.deny_exceptions) and (
@@ -800,7 +804,7 @@ class Pipeline:
         return self.classification["ownership_summary"]
 
     def _check_every_file_attested(self) -> tuple[bool, str]:
-        unattested = self.classification.get("unattested_files") or []
+        unattested = self.unattested_files
         if not unattested:
             return True, "CI attested every changed file"
         listed = ", ".join(unattested[:5]) + (f" and {len(unattested) - 5} more" if len(unattested) > 5 else "")

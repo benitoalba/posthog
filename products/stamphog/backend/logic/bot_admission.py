@@ -39,7 +39,7 @@ def matching_rule(rules: list[BotAuthorRule], pr: dict[str, Any], repo: str) -> 
     """The rule for this PR's author, when the bot opened it on a same-repository branch under its prefix."""
     user = pr.get("user") or {}
     head = pr.get("head") or {}
-    if (head.get("repo") or {}).get("full_name") != repo:
+    if str((head.get("repo") or {}).get("full_name") or "").lower() != repo.lower():
         return None
     return next(
         (
@@ -54,14 +54,18 @@ def matching_rule(rules: list[BotAuthorRule], pr: dict[str, Any], repo: str) -> 
 
 
 def commits_are_the_bots_own(commits: list[dict], rule: BotAuthorRule) -> bool:
-    """True when GitHub created and signed every commit for the bot.
+    """True when GitHub verified every commit as made for the bot.
 
-    A person can set any author on a commit they push, but GitHub signs as `web-flow` only a commit
-    it created itself, and it links the author to an account only by a verified email.
+    A person can set any author on a commit they push, but GitHub verifies a signature only against
+    the committer: `web-flow` for a commit GitHub created itself, or the bot for one the bot signed.
+    A bot account holds no key a person could sign with.
     """
     return bool(commits) and all(
         (commit.get("author") or {}).get("id") == rule.id
-        and (commit.get("committer") or {}).get("login") == WEB_FLOW_LOGIN
+        and (
+            (commit.get("committer") or {}).get("login") == WEB_FLOW_LOGIN
+            or (commit.get("committer") or {}).get("id") == rule.id
+        )
         and ((commit.get("commit") or {}).get("verification") or {}).get("verified") is True
         for commit in commits
     )

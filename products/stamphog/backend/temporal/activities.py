@@ -585,10 +585,10 @@ def _fetch_review_context(input: StamphogReviewInput) -> dict:
     number = pull_request.pr_number
 
     client = StamphogGitHubClient(repo_config.installation_id)
-    # Self-driving runs skip the author's history: the author is the App machine user, so
-    # familiarity from its merged PRs would read to the engine as human trust. Without facts the
-    # engine only omits the familiarity section from the reviewer prompt; the review proceeds normally.
-    is_inbox_review = bool((run.output or {}).get("inbox_review"))
+    # Bot runs skip the author's history: the author is a bot, so familiarity from its merged PRs
+    # would read to the engine as human trust. Without facts the engine only omits the familiarity
+    # section from the reviewer prompt; the review proceeds normally.
+    is_bot_review = bool((run.output or {}).get("inbox_review") or (run.output or {}).get("bot_author_review"))
     timer = _StepTimer()
     started = time.monotonic()
     # Mint the installation token once up front. On a cold cache every pool thread would mint its own.
@@ -629,26 +629,26 @@ def _fetch_review_context(input: StamphogReviewInput) -> dict:
         # The familiarity facts depend only on the PR and its files. fetch_review_history bounds its
         # own time and never raises.
         history_future = submit(
-            "history", fetch_review_history, client, repo, pr, files, include_familiarity=not is_inbox_review
+            "history", fetch_review_history, client, repo, pr, files, include_familiarity=not is_bot_review
         )
         folder_policy_future = submit(
             "folder_policy_files", fetch_folder_policy_files, client, repo, run.head_sha, files
         )
-        # Skipped for self-driving runs, like the familiarity facts above.
+        # Skipped for bot runs, like the familiarity facts above.
         author_pr_numbers_future = (
             submit("author_pr_numbers", client.get_author_merged_pr_numbers, repo, author)
-            if author and not is_inbox_review
+            if author and not is_bot_review
             else None
         )
         # The engine cannot resolve which of the owning teams the author belongs to. The sandbox holds
         # no token, and the engine learns the owning teams only after it reads the checkout's ownership
         # sources. One bulk lookup here gives the engine every team that the author belongs to, and the
-        # engine intersects that list with the teams that own the changed paths. Inbox reviews skip this
-        # lookup for the same reason that they skip author_pr_numbers: the author is the App machine
-        # user, so its team membership says nothing about who wrote the diff.
+        # engine intersects that list with the teams that own the changed paths. Bot runs skip this
+        # lookup for the same reason that they skip author_pr_numbers: the author is a bot, so its team
+        # membership says nothing about who wrote the diff.
         author_team_slugs_future = (
             submit("author_team_slugs", client.get_user_team_slugs, repo.split("/")[0], author)
-            if author and not is_inbox_review
+            if author and not is_bot_review
             else None
         )
 

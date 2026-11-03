@@ -83,7 +83,7 @@ from github import (
     provenance_from_messages,
 )
 from policy import FamiliarityPolicy
-from review_pr import REPO_ROOT, GateResult, Pipeline, flush_analytics
+from review_pr import ATTESTATION_GATES, REPO_ROOT, GateResult, Pipeline, flush_analytics
 from version import STAMPHOG_VERSION
 
 # The hosted server exports the sandbox's wall clock in milliseconds right before `uv run`, so the
@@ -431,9 +431,7 @@ def _blocked_only_by_pending_attestations(pipeline: Pipeline) -> bool:
     cl = pipeline.classification
     if not pipeline.pending_attestations_clear_every_block():
         return False
-    if any(
-        not gate.passed and gate.gate not in ("deny-list", "attestations", "tier") for gate in pipeline.gate_results
-    ):
+    if any(not gate.passed and gate.gate not in (*ATTESTATION_GATES, "tier") for gate in pipeline.gate_results):
         return False
     tier_without_denies = assign_tier(
         deny_categories=[],
@@ -450,7 +448,7 @@ def _blocked_only_by_pending_attestations(pipeline: Pipeline) -> bool:
 
 # Gates the pre-check evaluates from the same inputs the sandbox uses, so a failure here is a
 # failure there. The size gate is not in this set: see _size_denial_is_final.
-_CHECKOUT_FREE_GATES = frozenset({"prerequisites", "deny-list", "tier"})
+_CHECKOUT_FREE_GATES = frozenset({"prerequisites", "deny-list", "attestations", "tier"})
 
 
 def _size_denial_is_final(pipeline: Pipeline, folder_policies_known: bool) -> bool:

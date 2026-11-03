@@ -577,8 +577,7 @@ def _parse_bot_authors(raw: object) -> tuple[BotAuthor, ...]:
     for index, spec in enumerate(raw):
         context = f"bot_authors[{index}]"
         _require(isinstance(spec, dict), f"{context}: must be a mapping")
-        unknown = set(spec) - _BOT_AUTHOR_KEYS
-        _require(not unknown, f"{context}: unknown keys {sorted(unknown)}")
+        _require_exact_keys(spec, _BOT_AUTHOR_KEYS, context)
         login = _optional_string(spec, "login", context) or ""
         _require(login.endswith("[bot]"), f"{context}.login: must be a bot login ending in [bot]")
         _require(all(login != other.login for other in parsed), f"{context}.login: duplicate {login!r}")

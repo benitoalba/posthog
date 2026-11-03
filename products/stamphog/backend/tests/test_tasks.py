@@ -342,25 +342,38 @@ def test_disabled_repo_skip_retracts_stale_approvals_on_head_change(team, repo_c
     mock_execute.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "skipped_updated_at,expected_status",
+    [
+        # Still live, the run of the old head could post its approval after the dismissal.
+        ("2026-07-02T00:00:00Z", ReviewRunStatus.SUPERSEDED),
+        # A late retry of an older delivery must not cancel the run of the newer head.
+        ("2026-06-30T00:00:00Z", ReviewRunStatus.QUEUED),
+    ],
+    ids=["current_delivery_supersedes", "stale_delivery_leaves_the_run_live"],
+)
 @pytest.mark.django_db(databases=PRODUCT_DATABASES)
-def test_untrusted_author_skip_retracts_stale_approvals_on_head_change(team, repo_config):
+def test_untrusted_author_skip_retracts_stale_approvals_on_head_change(
+    team, repo_config, skipped_updated_at, expected_status
+):
     # An author who loses their trusted association (left the org, collaborator removed) can still
     # push to an approved PR; the payload-only skip must retract the standing approval, not just
     # drop the event — otherwise the old approval keeps satisfying required reviews.
-    _run_task(_pr_payload(), "delivery-assoc-approved", team.id)
+    _run_task(_pr_payload(updated_at="2026-07-01T00:00:00Z"), f"delivery-assoc-approved-{expected_status}", team.id)
 
     with patch("products.stamphog.backend.tasks.tasks.dismiss_stale_approvals_for_head", return_value=1) as dismiss:
         _run_task(
-            _pr_payload(action="synchronize", head_sha="sha-2", author_association="NONE"),
-            "delivery-assoc-revoked",
+            _pr_payload(
+                action="synchronize", head_sha="sha-2", author_association="NONE", updated_at=skipped_updated_at
+            ),
+            f"delivery-assoc-revoked-{expected_status}",
             team.id,
         )
 
     dismiss.assert_called_once()
     with team_scope(team.id):
         [run] = ReviewRun.objects.all()  # no second run was queued
-    # Still live, the run of the old head could post its approval after the dismissal.
-    assert run.status == ReviewRunStatus.SUPERSEDED
+    assert run.status == expected_status
 
 
 @pytest.mark.parametrize(
@@ -1050,10 +1063,12 @@ bot_authors:
 """
 
 
-def _bot_commit(*, author_id: int = _BOT_ID, committer: str = "web-flow", verified: bool = True) -> dict[str, Any]:
+def _bot_commit(
+    *, author_id: int = _BOT_ID, committer: str = "web-flow", committer_id: int = 19864447, verified: bool = True
+) -> dict[str, Any]:
     return {
         "author": {"id": author_id},
-        "committer": {"login": committer},
+        "committer": {"login": committer, "id": committer_id},
         "commit": {"verification": {"verified": verified}},
     }
 
@@ -1084,6 +1099,10 @@ def _bot_payload(*, sender_id: int = _BOT_ID, **overrides: Any) -> dict[str, Any
         pytest.param({"sender_id": 42}, _BOT_POLICY, [_bot_commit()], False, id="sent-by-someone-else"),
         pytest.param({}, _BOT_POLICY, [_bot_commit(), _bot_commit(author_id=42)], False, id="someone-elses-commit"),
         pytest.param({}, _BOT_POLICY, [_bot_commit(verified=False)], False, id="unsigned-commit"),
+        pytest.param(
+            {}, _BOT_POLICY, [_bot_commit(committer=_BOT_LOGIN, committer_id=_BOT_ID)], True, id="signed-by-the-bot"
+        ),
+        pytest.param({}, _BOT_POLICY, [_bot_commit(committer="someone", committer_id=42)], False, id="other-committer"),
         pytest.param({}, _BOT_POLICY, None, False, id="commit-list-short-of-head"),
         pytest.param({"head_branch": "feature/x"}, _BOT_POLICY, [_bot_commit()], False, id="branch-outside-prefix"),
         pytest.param({"head_repo": "someone/fork"}, _BOT_POLICY, [_bot_commit()], False, id="fork"),
@@ -1126,24 +1145,27 @@ def test_bot_admission_reviews_only_the_admitted_bots_own_pushes(
     mock_execute.assert_called_once_with(review_run_id=str(run.id), team_id=team.id)
 
 
+@pytest.mark.parametrize("draft", [False, True], ids=["ready", "draft"])
 @pytest.mark.django_db(databases=PRODUCT_DATABASES)
-def test_a_push_by_someone_else_hands_the_bots_pr_to_people_for_good(team, repo_config):
+def test_a_push_by_someone_else_hands_the_bots_pr_to_people_for_good(team, repo_config, draft):
     # The bot's next push can leave the other person's change in the PR, so it must not restore the admission.
     _sync_repo_config(team.id, repo_config)
-    _run_task(_bot_payload(), "delivery-bot-opened", team.id, policy_text=_BOT_POLICY, pr_commits=[_bot_commit()])
+    _run_task(
+        _bot_payload(), f"delivery-bot-opened-{draft}", team.id, policy_text=_BOT_POLICY, pr_commits=[_bot_commit()]
+    )
     _approved_run(team.id)
 
     with patch("products.stamphog.backend.tasks.tasks.dismiss_stale_approvals_for_head", return_value=1) as dismiss:
         _run_task(
-            _bot_payload(action="synchronize", head_sha="sha-2", sender_id=42),
-            "delivery-bot-foreign-push",
+            _bot_payload(action="synchronize", head_sha="sha-2", sender_id=42, draft=draft),
+            f"delivery-bot-foreign-push-{draft}",
             team.id,
             policy_text=_BOT_POLICY,
             pr_commits=[_bot_commit(), _bot_commit(author_id=42)],
         )
         mock_execute = _run_task(
             _bot_payload(action="synchronize", head_sha="sha-3"),
-            "delivery-bot-push-after",
+            f"delivery-bot-push-after-{draft}",
             team.id,
             policy_text=_BOT_POLICY,
             pr_commits=[_bot_commit()],

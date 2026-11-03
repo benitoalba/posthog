@@ -828,6 +828,8 @@ def test_admitted_bot_needs_ci_to_attest_every_file(
     outcome = review_local.pregate(context)
 
     assert review_local.run(context)["final_verdict"] == expected_verdict
+    # Only an approval needs the sandbox review. Every refusal and wait is already decided.
+    assert outcome["final"] is (expected_verdict != "APPROVED")
     if outcome["final"]:
         assert outcome["result"]["final_verdict"] == expected_verdict
 

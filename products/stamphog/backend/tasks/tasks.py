@@ -273,8 +273,8 @@ def _inbox_rereview_carve_out(
     # repo-native head ref is GitHub's word rather than an attacker-controlled fork branch name.
     if not _is_self_driving_pr(pr, repo):
         return _InboxCarveOut()
-    repo_config = _bound_repo_config(installation_id, repo)
-    if repo_config is None:
+    repo_config = _resolve_repo_config(installation_id, repo)
+    if repo_config is None or not _is_bound(repo_config):
         return _InboxCarveOut()
     run = find_signal_implementation_run(
         team_id=repo_config.team_id,
@@ -298,44 +298,42 @@ def _inbox_rereview_carve_out(
     )
 
 
-def _bound_repo_config(installation_id: str, repo: str) -> StamphogRepoConfig | None:
-    """The repo's config when it is enabled and bound to an installation and a connecting user."""
-    repo_config = _resolve_repo_config(installation_id, repo)
-    if (
-        repo_config is None
-        or not repo_config.enabled
-        or not repo_config.installation_id
-        or repo_config.connected_by_user_id is None
-    ):
-        return None
-    return repo_config
+def _is_bound(repo_config: StamphogRepoConfig) -> bool:
+    """Whether the config is enabled and bound to an installation and a connecting user."""
+    return bool(repo_config.enabled and repo_config.installation_id and repo_config.connected_by_user_id is not None)
 
 
 def _bot_author_admission(
-    installation_id: str, repo: str, payload: dict[str, Any], action: str
+    installation_id: str, repo: str, payload: dict[str, Any], action: str, skip_reason: str
 ) -> dict[str, Any] | None:
     """The provenance of a review of an admitted bot's PR for this delivery, or None when the bot refusal stands.
 
     The delivery's sender must be the bot too, so the push being reviewed is the bot's own. A push by
-    anyone else to the bot's PR revokes the admission for good. GitHub attests every fact this reads:
-    the author's login and id, the head repository and branch, the sender, and each commit's author,
-    committer and signature.
+    anyone else to the bot's PR revokes the admission for good, also while the PR is a draft or the
+    repo is disabled. GitHub attests every fact this reads: the author's login and id, the head
+    repository and branch, the sender, and each commit's author, committer and signature.
     """
     if action not in _BOT_AUTHOR_REVIEW_ACTIONS:
         return None
-    repo_config = _bound_repo_config(installation_id, repo)
-    if repo_config is None:
+    repo_config = _resolve_repo_config(installation_id, repo)
+    if repo_config is None or not repo_config.installation_id:
         return None
     pr = payload.get("pull_request") or {}
+    # The policy matters only to a delivery that could be admitted, or to a push that revokes.
+    if (payload.get("sender") or {}).get("id") == (pr.get("user") or {}).get("id"):
+        if skip_reason != "bot_author" or not _is_bound(repo_config):
+            return None
+    elif action != "synchronize":
+        return None
     client = StamphogGitHubClient(repo_config.installation_id)
     rule = _policy_bot_rule(client, repo_config, pr)
     if rule is None:
         return None
     if (payload.get("sender") or {}).get("id") != rule.id:
-        if action == "synchronize":
-            _revoke_bot_admission(repo_config, pr)
+        _revoke_bot_admission(repo_config, pr)
         return None
     if not _bot_still_admitted(client, repo_config, pr, rule):
+        logger.info("stamphog_bot_author_not_admitted", repo=repo, pr_number=pr.get("number"))
         return None
     return {"trigger": "webhook", "action": action, "login": rule.login}
 
@@ -362,20 +360,17 @@ def _bot_still_admitted(
     client: StamphogGitHubClient, repo_config: StamphogRepoConfig, pr: dict[str, Any], rule: BotAuthorRule
 ) -> bool:
     """Whether no one else has pushed to this bot's PR: no earlier revocation, and every commit is the bot's own."""
-    if _bot_admission_revoked(repo_config, pr):
-        return False
-    commits = client.get_pr_commits(repo_config.repository, pr["number"], (pr.get("head") or {}).get("sha") or "")
-    return commits is not None and commits_are_the_bots_own(commits, rule)
-
-
-def _bot_admission_revoked(repo_config: StamphogRepoConfig, pr: dict[str, Any]) -> bool:
     # Writer pin: this read admits a run that can approve.
-    return (
+    revoked = (
         PullRequest.objects.for_team(repo_config.team_id)
         .using(router.db_for_write(PullRequest))
         .filter(repo_config=repo_config, pr_number=pr["number"], bot_admission_revoked_at__isnull=False)
         .exists()
     )
+    if revoked:
+        return False
+    commits = client.get_pr_commits(repo_config.repository, pr["number"], (pr.get("head") or {}).get("sha") or "")
+    return commits is not None and commits_are_the_bots_own(commits, rule)
 
 
 def _revoke_bot_admission(repo_config: StamphogRepoConfig, pr: dict[str, Any]) -> None:
@@ -590,24 +585,28 @@ def _resume_existing_delivery_run(delivery_id: str, team_id: int, repo: str) -> 
     return True
 
 
-def _supersede_prior_runs(pr_obj: PullRequest) -> None:
-    """Mark every non-terminal run for this PR as superseded, under a row lock.
+def _supersede_prior_runs(pr_obj: PullRequest, keep_head_sha: str | None = None) -> int:
+    """Mark every non-terminal run for this PR as superseded, under a row lock, and count them.
 
     A new push (synchronize) or reopen makes any queued/in-flight run stale — its
     head SHA no longer matches. Locking the rows first keeps two concurrent
-    deliveries for the same PR from both leaving a live run behind.
+    deliveries for the same PR from both leaving a live run behind. Runs at
+    ``keep_head_sha`` stay live.
     """
-    stale_ids = list(
+    runs = (
         ReviewRun.objects.for_team(pr_obj.team_id)
         .select_for_update()
         .filter(pull_request=pr_obj)
         .exclude(status__in=TERMINAL_STATUSES)
-        .values_list("id", flat=True)
     )
+    if keep_head_sha is not None:
+        runs = runs.exclude(head_sha=keep_head_sha)
+    stale_ids = list(runs.values_list("id", flat=True))
     if stale_ids:
         ReviewRun.objects.for_team(pr_obj.team_id).filter(id__in=stale_ids).update(
             status=ReviewRunStatus.SUPERSEDED, updated_at=timezone.now()
         )
+    return len(stale_ids)
 
 
 _BASE_RETARGET_DISMISS_MESSAGE = (
@@ -897,14 +896,14 @@ def _retract_stale_approvals_on_skip(repo_config: StamphogRepoConfig, pr: dict[s
     if pull_request is None:
         return
     # A run at this head was admitted by another delivery for the same push, which can be processed
-    # before this one, so only runs of older heads are stale.
-    superseded = (
-        ReviewRun.objects.for_team(team_id)
-        .filter(pull_request=pull_request)
-        .exclude(status__in=TERMINAL_STATUSES)
-        .exclude(head_sha=head_sha)
-        .update(status=ReviewRunStatus.SUPERSEDED, updated_at=timezone.now())
-    )
+    # before this one, so only runs of older heads are stale. A delivery older than the stored
+    # snapshot (a late retry) must not supersede the run of the newer head.
+    incoming_updated_at = parse_datetime(pr.get("updated_at") or "")
+    stored_updated_at = pull_request.payload_updated_at
+    superseded = 0
+    if not (incoming_updated_at and stored_updated_at and incoming_updated_at < stored_updated_at):
+        with transaction.atomic(using=router.db_for_write(ReviewRun)):
+            superseded = _supersede_prior_runs(pull_request, keep_head_sha=head_sha)
     dismissed = dismiss_stale_approvals_for_head(team_id, pull_request, repo_config, head_sha, message=message)
     if superseded or dismissed:
         logger.info(
@@ -1302,8 +1301,8 @@ def process_pull_request_event(payload: dict[str, Any], delivery_id: str) -> Non
         # lookups fail, so record the error, fall through to it, then retry.
         try:
             carve_out = _inbox_rereview_carve_out(installation_id, repo, pr, action, base_retargeted)
-            if carve_out.provenance is None and skip_reason == "bot_author":
-                bot_author_review = _bot_author_admission(installation_id, repo, payload, action)
+            if carve_out.provenance is None and _is_bot_authored(pr):
+                bot_author_review = _bot_author_admission(installation_id, repo, payload, action, skip_reason)
         except Exception as e:
             logger.exception("stamphog_pr_event_carve_out_failed", delivery_id=delivery_id, error=str(e))
             carve_out_error = e
@@ -1410,7 +1409,7 @@ def process_pull_request_event(payload: dict[str, Any], delivery_id: str) -> Non
         # Honor GitHub's own backoff hint: the default 5s retry delay lands inside the same rate
         # window and burns the attempt budget without ever succeeding.
         logger.warning("stamphog_pr_event_author_permission_rate_limited", delivery_id=delivery_id)
-        raise cast(Any, process_pull_request_event).retry(exc=e, countdown=max(e.retry_after or 0, 60))
+        raise cast(Any, process_pull_request_event).retry(exc=e, countdown=_retry_countdown(e))
     except Exception as e:
         logger.exception("stamphog_pr_event_author_permission_failed", delivery_id=delivery_id, error=str(e))
         raise cast(Any, process_pull_request_event).retry(exc=e)
@@ -1759,7 +1758,7 @@ def process_inbox_pr_review(
         pr = StamphogGitHubClient(repo_config.installation_id).get_pr(repo_config.repository, pr_number)
     except GitHubRateLimitError as e:
         logger.warning("stamphog_inbox_pr_fetch_rate_limited", repository=repository, pr_number=pr_number)
-        raise cast(Any, process_inbox_pr_review).retry(exc=e, countdown=max(e.retry_after or 0, 60))
+        raise cast(Any, process_inbox_pr_review).retry(exc=e, countdown=_retry_countdown(e))
     except Exception as e:
         logger.exception("stamphog_inbox_pr_fetch_failed", repository=repository, pr_number=pr_number, error=str(e))
         raise cast(Any, process_inbox_pr_review).retry(exc=e)
@@ -2042,7 +2041,7 @@ def rereview_after_external_review(
             _rereview_waiting_run(repo_config, pr_number, head_sha, completed_check)
     except GitHubRateLimitError as e:
         logger.warning("stamphog_rereview_rate_limited", repository=repository, pr_number=pr_number)
-        raise self.retry(exc=e, countdown=max(e.retry_after or 0, 60))
+        raise self.retry(exc=e, countdown=_retry_countdown(e))
     except Exception as e:
         logger.exception("stamphog_rereview_failed", repository=repository, pr_number=pr_number, error=str(e))
         raise self.retry(exc=e, countdown=_REREVIEW_RETRY_BASE_SECONDS * 2**self.request.retries)
