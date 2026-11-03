@@ -114,7 +114,7 @@ from products.tasks.backend.facade.metrics import (
     observe_stream_token_routed,
 )
 from products.tasks.backend.facade.model_catalogue import TASK_RUN_GATEWAY_PRODUCT, available_model_choices
-from products.tasks.backend.facade.profiles import public_profile_for_origin
+from products.tasks.backend.facade.profiles import find_task_profile, public_profile_for_origin
 from products.tasks.backend.facade.run_config import (
     WARMABLE_ORIGIN_PRODUCTS,
     RunSource,
@@ -467,6 +467,12 @@ class TaskUsageUpstreamUnavailable(APIException):
     default_code = "task_usage_upstream_unavailable"
 
 
+def _requested_origin_product(data: dict) -> object:
+    profile_key = data.get("profile")
+    profile = find_task_profile(profile_key) if isinstance(profile_key, str) else None
+    return profile.origin_product if profile is not None else data.get("origin_product")
+
+
 class _SignalReportTaskThrottle(UserRateThrottle):
     """Rate-limits only signal-report task creation and sandbox warming on the shared endpoints.
 
@@ -477,7 +483,7 @@ class _SignalReportTaskThrottle(UserRateThrottle):
 
     def allow_request(self, request: Request, view: APIView) -> bool:
         data = request.data
-        if not isinstance(data, dict) or data.get("origin_product") != "signal_report":
+        if not isinstance(data, dict) or _requested_origin_product(data) != "signal_report":
             return True
         return super().allow_request(request, view)
 

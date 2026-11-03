@@ -7236,6 +7236,28 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
         )
         self.assertEqual(signals_task_ids(report_id=str(report.id), type=TASK_RUN_TYPE_IMPLEMENTATION), [str(task.id)])
 
+    def test_a_signal_report_profile_counts_against_the_report_task_limit(self) -> None:
+        from products.signals.backend.models import SignalReport
+        from products.tasks.backend.presentation.views.api import SignalReportTaskCreateBurstThrottle
+
+        reports = [SignalReport.objects.create(team=self.team) for _ in range(2)]
+
+        with (
+            patch(
+                "products.tasks.backend.logic.repo_selection.cascade.cascade_select_repository",
+                return_value="acme/web",
+            ),
+            patch.object(SignalReportTaskCreateBurstThrottle, "rate", "1/day"),
+        ):
+            statuses = [
+                self._create(
+                    profile="signals.inbox", source={"kind": "signal_report", "id": str(report.id)}
+                ).status_code
+                for report in reports
+            ]
+
+        self.assertEqual(statuses, [status.HTTP_201_CREATED, status.HTTP_429_TOO_MANY_REQUESTS])
+
     def test_create_refuses_a_source_beside_a_signal_report(self) -> None:
         from products.signals.backend.models import SignalReport
 
