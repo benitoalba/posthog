@@ -157,6 +157,9 @@ task = Task.create_and_run(
 
 ### Adding a new origin product
 
+Task creation needs a registered profile.
+A profile names the origin product and sets who can see the task, the sandbox limits and the defaults.
+
 If your product doesn't have an `OriginProduct` entry yet,
 add one to `Task.OriginProduct` in `products/tasks/backend/models.py`:
 
@@ -168,6 +171,25 @@ class OriginProduct(models.TextChoices):
 ```
 
 Then create and run a Django migration.
+
+Define a `TaskProfile` for your product in `products/your_product/backend/task_profiles.py`,
+with `origin_product="your_product"`.
+`products/autoresearch/backend/task_profiles.py` is a complete example.
+Give each kind of task its own profile key, such as `your_product.report`.
+
+Register the profiles from your product's `AppConfig.ready()`:
+
+```python
+def ready(self) -> None:
+    from products.your_product.backend import task_profiles
+
+    task_profiles.register()
+```
+
+`products/autoresearch/backend/apps.py` shows the same call.
+
+Pass the profile as `profile=` when you create the task.
+Import it from your module, or look it up by key with `get_task_profile("your_product.report")`.
 
 ### Starting a task from a deep link
 
