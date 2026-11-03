@@ -22,6 +22,12 @@ from posthog.tasks import exporter
 from products.access_control.backend.models.access_control import AccessControl
 from products.ai_observability.backend.facade import api, contracts
 from products.ai_observability.backend.logic.traces import trace_queries
+from products.ai_observability.backend.logic.traces.review import (
+    HumanReview,
+    QueueAssignment,
+    ReviewScore,
+    TraceReviewState,
+)
 from products.ai_observability.backend.logic.traces.summary import (
     FailedSummary,
     PendingSummary,
@@ -236,6 +242,43 @@ def test_feedback_reads_the_surveys_linked_to_the_trace_from_its_day(
 
     assert read_surveys.call_args_list == expected_reads
     assert (feedback.survey_responses_status, len(feedback.scores)) == (expected_status, len(rows))
+
+
+REVIEWED_AND_QUEUED = TraceReviewState(
+    review=HumanReview(
+        reviewed_by="Ada",
+        reviewed_at=T0,
+        comment="Looks right",
+        scores=(ReviewScore(name="Tone", value="4.5"),),
+    ),
+    queue=QueueAssignment(queue_id="q1", queue_name="Support QA", item_id="i1"),
+)
+
+
+@parameterized.expand(
+    [
+        (
+            "reviewed and queued",
+            REVIEWED_AND_QUEUED,
+            {
+                "review": {
+                    "reviewedBy": "Ada",
+                    "reviewedAt": T0.isoformat().replace("+00:00", "Z"),
+                    "comment": "Looks right",
+                    "scores": [{"name": "Tone", "value": "4.5", "label": "Tone: 4.5"}],
+                },
+                "queue": {"id": "q1", "name": "Support QA", "itemId": "i1"},
+            },
+        ),
+        ("neither", TraceReviewState(review=None, queue=None), {"review": None, "queue": None}),
+    ]
+)
+def test_review_status_maps_the_review_and_queue(_name: str, state: TraceReviewState, expected: dict) -> None:
+    with patch.object(api, "load_trace_review_state", return_value=state) as load:
+        status = api.get_trace_review_status(MagicMock(spec=Team, id=7), "trace-1")
+
+    load.assert_called_once_with(7, "trace-1")
+    assert status.model_dump(mode="json", by_alias=True) == expected
 
 
 class TestGetTraceEvaluationResults(ClickhouseTestMixin, BaseTest):
