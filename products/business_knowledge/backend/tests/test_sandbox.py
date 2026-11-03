@@ -31,8 +31,8 @@ from products.business_knowledge.backend.sandbox import (
     format_always_on_context,
     parse_sandbox_log,
 )
+from products.tasks.backend.facade.temporal import mcp_exclude_tools_for_task
 from products.tasks.backend.models import SandboxEnvironment, Task, TaskRun
-from products.tasks.backend.temporal.process_task.utils import mcp_exclude_tools_for_task
 
 WORKFLOW = "products.tasks.backend.temporal.client.execute_task_processing_workflow"
 

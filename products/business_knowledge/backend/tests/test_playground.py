@@ -14,8 +14,8 @@ from posthog.models.user import User
 from products.business_knowledge.backend.api.playground import BusinessKnowledgePlaygroundChatViewSet
 from products.business_knowledge.backend.constants import MAX_OPEN_RUNS_PER_OWNER
 from products.business_knowledge.backend.models import PlaygroundChat, PlaygroundTurn
+from products.tasks.backend.facade.temporal import mcp_exclude_tools_for_task
 from products.tasks.backend.models import Task, TaskRun
-from products.tasks.backend.temporal.process_task.utils import mcp_exclude_tools_for_task
 
 WORKFLOW = "products.tasks.backend.temporal.client.execute_task_processing_workflow"
 
