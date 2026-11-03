@@ -8058,7 +8058,7 @@ def create_task(
         columns = apply_task_source(source, signal_report_id=None, hog_flow_id=None)
         validated_data["source_kind"] = source.kind.value
         validated_data["source_id"] = source.id
-        if columns.signal_report_id is not None:
+        if columns.signal_report_id is not None and "signal_report" not in validated_data:
             validated_data["signal_report_id"] = columns.signal_report_id
         if columns.hog_flow_id is not None:
             validated_data["hog_flow_id"] = columns.hog_flow_id

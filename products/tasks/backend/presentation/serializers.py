@@ -1392,6 +1392,8 @@ class TaskCreateSerializer(TaskWriteSerializer, TaskRunScheduleSerializer):
         attrs.update(profile=profile.key, origin_product=origin.origin_product, internal=origin.internal)
         if source is not None:
             attrs["source"] = source
+            if source.kind == SourceKind.SIGNAL_REPORT:
+                attrs["signal_report"] = self.fields["signal_report"].to_internal_value(source.id)
         if idempotency_key is not None:
             user_id = getattr(getattr(self.context.get("request"), "user", None), "id", None)
             attrs["idempotency_key"] = public_idempotency_key(user_id, idempotency_key)
