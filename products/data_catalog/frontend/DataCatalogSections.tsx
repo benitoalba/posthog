@@ -137,7 +137,7 @@ export function DataCatalogSections(): JSX.Element {
                 {availableTabs.map((tab) => {
                     const Content = SECTION_CONTENT[tab]
                     return Content ? (
-                        <TabsContent key={tab} value={tab} className="pt-4">
+                        <TabsContent key={tab} value={tab} className="pt-4 pb-8">
                             {tab === activeTab && <Content />}
                         </TabsContent>
                     ) : null
