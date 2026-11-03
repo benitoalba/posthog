@@ -107,12 +107,16 @@ class TestPushTokenImportJob(APIBaseTest):
             patch.object(push_token_import, "BATCHES_PER_TASK", 1),
             patch("products.workflows.backend.tasks.push_token_import.run_push_token_import.delay"),
             patch("products.workflows.backend.tasks.push_token_import.check_push_token_import_stalled.apply_async"),
-            patch("products.workflows.backend.tasks.push_token_import.expire_push_token_import_devices.apply_async"),
             patch.object(push_token_import, "ph_scoped_capture"),
         ]
         for patcher in patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
+        expire = patch(
+            "products.workflows.backend.tasks.push_token_import.expire_push_token_import_devices.apply_async"
+        )
+        self.schedule_expiry = expire.start()
+        self.addCleanup(expire.stop)
         self.captured: list[list[dict[str, Any]]] = []
         self.drop_once: set[str] = set()
         capture = patch("posthog.api.integration_push_tokens.capture_batch_internal", side_effect=self._capture)
@@ -162,6 +166,8 @@ class TestPushTokenImportJob(APIBaseTest):
         )
         assert response.status_code == status.HTTP_201_CREATED, response.json()
         assert response.json()["status"] == "running"
+        kept_for = push_token_import.UNKNOWN_PERSON_DEVICES_KEPT_FOR + push_token_import.EXPIRY_MARGIN
+        assert self.schedule_expiry.call_args.kwargs["countdown"] == int(kept_for.total_seconds())
 
         result = self._run_to_end(response.json()["id"])
 
@@ -259,6 +265,7 @@ class TestPushTokenImportJob(APIBaseTest):
 
         assert PushTokenImport.objects.for_team(self.team.id).get(id=import_id).storage_key != ""
         retry_cleanup.assert_called_once()
+        assert retry_cleanup.call_args.kwargs["countdown"] == int(push_token_import.DELETE_RETRY_AFTER.total_seconds())
 
     def test_a_batch_sent_again_after_a_crash_reuses_its_event_ids(self) -> None:
         lines = [f"a,{APNS_TOKEN}", f"b,{APNS_TOKEN}", f"c,{APNS_TOKEN}"]

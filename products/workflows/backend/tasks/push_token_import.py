@@ -7,6 +7,7 @@ from posthog.scoping_audit import skip_team_scope_audit
 from posthog.tasks.utils import CeleryQueue
 
 from products.workflows.backend.services.push_token_import import (
+    EXPIRY_MARGIN,
     STALL_CHECK_EVERY,
     check_stalled_push_token_import,
     expire_unknown_person_devices,
@@ -51,4 +52,7 @@ def check_push_token_import_stalled(*, team_id: int, import_id: str) -> None:
 @shared_task(ignore_result=True, queue=CeleryQueue.DEFAULT.value)
 @skip_team_scope_audit
 def expire_push_token_import_devices(*, team_id: int, import_id: str) -> None:
-    expire_unknown_person_devices(team_id, UUID(import_id))
+    if expire_unknown_person_devices(team_id, UUID(import_id)):
+        expire_push_token_import_devices.apply_async(
+            kwargs={"team_id": team_id, "import_id": import_id}, countdown=int(EXPIRY_MARGIN.total_seconds())
+        )

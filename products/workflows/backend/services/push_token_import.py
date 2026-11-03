@@ -48,6 +48,8 @@ BATCHES_PER_TASK = 20
 MAX_STORED_FAILURES = 1000
 # Devices of people who don't exist yet stay stored this long, so they can be imported with new persons.
 UNKNOWN_PERSON_DEVICES_KEPT_FOR = timedelta(hours=24)
+# Counted from the upload, so it covers the time the import itself takes.
+EXPIRY_MARGIN = timedelta(hours=1)
 # A task run takes seconds, so this much quiet means the worker stopped, for example in a deploy.
 STALL_CHECK_EVERY = timedelta(minutes=5)
 DELETE_RETRY_AFTER = timedelta(hours=1)
@@ -403,11 +405,15 @@ def check_stalled_push_token_import(team_id: int, import_id: uuid.UUID) -> bool:
     return False
 
 
-def expire_unknown_person_devices(team_id: int, import_id: uuid.UUID) -> None:
+def expire_unknown_person_devices(team_id: int, import_id: uuid.UUID) -> bool:
+    """Deletes the devices an import kept. Returns True when the import still runs, so the check comes back later."""
     job = PushTokenImport.objects.for_team(team_id).filter(id=import_id).exclude(storage_key="").first()
-    if job is None or job.status == PushTokenImportStatus.RUNNING:
-        return
+    if job is None:
+        return False
+    if job.status == PushTokenImportStatus.RUNNING:
+        return True
     _release_devices(team_id, import_id, job.storage_key)
+    return False
 
 
 def _create_import(
@@ -425,6 +431,7 @@ def _create_import(
     # The task module imports this one, so a module-level import would be circular.
     from products.workflows.backend.tasks.push_token_import import (  # noqa: PLC0415
         check_push_token_import_stalled,
+        expire_push_token_import_devices,
         run_push_token_import,
     )
 
@@ -456,6 +463,11 @@ def _create_import(
         check_push_token_import_stalled.apply_async(
             kwargs={"team_id": team.id, "import_id": str(job.id)}, countdown=int(STALL_CHECK_EVERY.total_seconds())
         )
+        # Scheduled with the import, so devices kept for unknown people can't outlive it if a later step fails.
+        expire_push_token_import_devices.apply_async(
+            kwargs={"team_id": team.id, "import_id": str(job.id)},
+            countdown=int((UNKNOWN_PERSON_DEVICES_KEPT_FOR + EXPIRY_MARGIN).total_seconds()),
+        )
     except Exception:
         fail_push_token_import(team.id, job.id, "The import couldn't start. Try again.")
         raise
@@ -477,15 +489,7 @@ def _finish(job: PushTokenImport) -> None:
     if not finished:
         return
     job.refresh_from_db()
-    if keep_unknown:
-        # The task module imports this one, so a module-level import would be circular.
-        from products.workflows.backend.tasks.push_token_import import expire_push_token_import_devices  # noqa: PLC0415
-
-        expire_push_token_import_devices.apply_async(
-            kwargs={"team_id": job.team_id, "import_id": str(job.id)},
-            countdown=int(UNKNOWN_PERSON_DEVICES_KEPT_FOR.total_seconds()),
-        )
-    else:
+    if not keep_unknown:
         _release_devices(job.team_id, job.id, storage_key)
     _report_finished(job)
 
