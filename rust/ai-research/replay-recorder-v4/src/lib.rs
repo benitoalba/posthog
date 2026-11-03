@@ -13,4 +13,5 @@ pub mod process;
 pub mod store;
 pub mod teams;
 pub mod urls;
+pub mod watermark;
 pub mod write;
