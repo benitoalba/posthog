@@ -3,9 +3,17 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
+from posthog.dataclasses import frozen
+
 from products.tasks.backend.facade.profiles import Repository, TaskRunOptions
 
 PUBLIC_CREATE_FIELDS = ("options", "source", "idempotency_key")
+
+
+@frozen
+class IdempotentRequest:
+    key: str
+    fingerprint: str
 
 
 def uses_public_create(validated_data: Mapping[str, Any]) -> bool:
@@ -60,3 +68,12 @@ def request_fingerprint(data: Mapping[str, Any]) -> str:
 
 def public_idempotency_key(user_id: int | None, key: str) -> str:
     return f"api:{user_id}:{key}"
+
+
+def idempotent_request(user_id: int | None, data: Any) -> IdempotentRequest | None:
+    if not isinstance(data, Mapping) or "profile" not in data:
+        return None
+    key = data.get("idempotency_key")
+    if not isinstance(key, str) or not key.strip():
+        return None
+    return IdempotentRequest(key=public_idempotency_key(user_id, key.strip()), fingerprint=request_fingerprint(data))

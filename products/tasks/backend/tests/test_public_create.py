@@ -8,6 +8,7 @@ from products.tasks.backend.facade.run_config import REASONING_EFFORTS
 from products.tasks.backend.presentation.serializers import PublicReasoningEffort, TaskRunOptionsRequestSerializer
 from products.tasks.backend.public_create import (
     create_fields_from_options,
+    idempotent_request,
     options_from_request,
     public_idempotency_key,
     request_fingerprint,
@@ -144,3 +145,24 @@ class TestPublicCreateIdempotency(SimpleTestCase):
         self.assertEqual(
             public_idempotency_key(first_user, first_key) == public_idempotency_key(second_user, second_key), same
         )
+
+    @parameterized.expand(
+        [
+            ("complete", {"profile": "p", "idempotency_key": "k"}, True),
+            ("padded_key", {"profile": "p", "idempotency_key": " k "}, True),
+            ("without_a_profile", {"idempotency_key": "k"}, False),
+            ("without_a_key", {"profile": "p"}, False),
+            ("blank_key", {"profile": "p", "idempotency_key": "  "}, False),
+            ("key_that_is_not_text", {"profile": "p", "idempotency_key": 5}, False),
+            ("body_that_is_not_an_object", ["profile", "idempotency_key"], False),
+        ]
+    )
+    def test_only_a_profiled_request_with_a_text_key_looks_up_a_replay(
+        self, _name: str, data: Any, looks: bool
+    ) -> None:
+        replay_request = idempotent_request(1, data)
+
+        self.assertEqual(replay_request is not None, looks)
+        if replay_request is not None:
+            self.assertEqual(replay_request.key, public_idempotency_key(1, "k"))
+            self.assertEqual(replay_request.fingerprint, request_fingerprint(data))

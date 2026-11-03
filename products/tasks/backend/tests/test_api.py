@@ -7278,6 +7278,27 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
         self.assertEqual(second.json()["code"], "idempotency_key_reused")
         self.assertEqual(Task.objects.filter(team=self.team).count(), 1)
 
+    @time_machine.travel("2026-09-18T12:00:00Z", tick=False)
+    @patch("products.tasks.backend.presentation.views.api._is_internal_debug_team", return_value=True)
+    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
+    def test_repeating_a_scheduled_create_after_its_time_returns_the_first_task(
+        self, _mock_workflow, _mock_internal_team
+    ) -> None:
+        payload = {
+            "profile": "test.public",
+            "idempotency_key": "scheduled-1",
+            "start_run": True,
+            "scheduled_at": "2026-09-19T12:00:00Z",
+        }
+        first = self._create(**payload)
+
+        with time_machine.travel("2026-09-20T12:00:00Z", tick=False):
+            second = self._create(**payload)
+
+        self.assertEqual((first.status_code, second.status_code), (status.HTTP_201_CREATED, status.HTTP_200_OK))
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(Task.objects.get(id=first.json()["id"]).runs.count(), 1)
+
     def test_reusing_a_key_after_the_task_was_deleted_is_refused(self) -> None:
         first = self._create(profile="test.public", idempotency_key="retry-3")
         Task.objects.get(id=first.json()["id"]).soft_delete()

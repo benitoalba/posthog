@@ -240,7 +240,7 @@ from products.tasks.backend.presentation.serializers import (
 )
 from products.tasks.backend.presentation.task_review_serializers import TaskReviewQuerySerializer, TaskReviewSerializer
 from products.tasks.backend.presentation.views.artifact_preview import create_artifact_preview_url
-from products.tasks.backend.public_create import uses_public_create
+from products.tasks.backend.public_create import idempotent_request, uses_public_create
 
 from ee.hogai.utils.aio import async_to_sync
 
@@ -847,6 +847,8 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         },
     )
     def create(self, request, **kwargs):
+        if (replay_response := self._replay_before_validation(request)) is not None:
+            return replay_response
         serializer = self._write_serializer(request.data, serializer_class=TaskCreateSerializer)
         validated_data = dict(serializer.validated_data)
         validated_data["state"] = {"created_on_mobile": request.headers.get("X-PostHog-Client-Platform") == "mobile"}
@@ -854,9 +856,6 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         run_data = validated_data.pop("run_data", {})
         origin_product = validated_data.get("origin_product", tasks_facade.TaskOriginProduct.USER_CREATED)
         relationship = serializer.validated_data.get("signal_report_task_relationship")
-
-        if (replay_response := self._idempotent_replay_response(validated_data)) is not None:
-            return replay_response
 
         sandbox_starter: tasks_contracts.SandboxRunStarter | None = None
         if start_run and is_sandbox_origin_request(request):
@@ -970,7 +969,14 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         except tasks_facade.WarmRunActivationUnavailable as error:
             return self._warm_activation_unavailable_response(error)
         except IntegrityError:
-            if (replay_response := self._idempotent_replay_response(validated_data)) is None:
+            replay_response = (
+                self._idempotent_replay_response(
+                    validated_data["idempotency_key"], validated_data["idempotency_fingerprint"]
+                )
+                if "idempotency_key" in validated_data
+                else None
+            )
+            if replay_response is None:
                 raise
             return replay_response
         finally:
@@ -985,14 +991,15 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
             response_data["run_error"] = run_error
         return Response(response_data, status=status.HTTP_201_CREATED)
 
-    def _idempotent_replay_response(self, validated_data: dict[str, Any]) -> Response | None:
-        idempotency_key = validated_data.get("idempotency_key")
-        if idempotency_key is None:
+    def _replay_before_validation(self, request: Request) -> Response | None:
+        replay_request = idempotent_request(self._user_id(), request.data)
+        if replay_request is None:
             return None
+        return self._idempotent_replay_response(replay_request.key, replay_request.fingerprint)
+
+    def _idempotent_replay_response(self, key: str, fingerprint: str) -> Response | None:
         try:
-            existing = tasks_facade.find_task_for_idempotency_key(
-                self.team_id, self._user_id(), idempotency_key, validated_data["idempotency_fingerprint"]
-            )
+            existing = tasks_facade.find_task_for_idempotency_key(self.team_id, self._user_id(), key, fingerprint)
         except tasks_facade.IdempotencyKeyReused:
             return Response(
                 TaskRunErrorResponseSerializer(
