@@ -11,7 +11,7 @@ use crate::inspect::assets::{AssetContext, AssetSlot, Buffer};
 use serde::de::IgnoredAny;
 
 use super::canvas::{self, CanvasImage};
-use posthog_replay_anonymizer::v4_image_refs::ImageDecline;
+use crate::v4_image_refs::ImageDecline;
 
 use super::images::{extract_images, ImageSink};
 use super::message::{canonicalize_keys, Event, Message};

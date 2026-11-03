@@ -8,9 +8,6 @@
 use std::collections::BTreeMap;
 
 use metrics::counter;
-use posthog_replay_anonymizer::v4_image_refs::{
-    bundled_font_ref, ImageDecline, IMAGE_DECLINED_PREFIX,
-};
 use replay_core_v4::inspect::assets::{AssetContext, Replacement};
 use replay_core_v4::inspect::css::{rewrite_css, CssAssetKind, CssRewriteCounts};
 use replay_core_v4::inspect::srcset::rewrite_srcset;
@@ -18,6 +15,7 @@ use replay_core_v4::refs::{declined_url_ref, UrlAsset};
 use replay_core_v4::scan::images::{inline_image, is_data_url, ImageSink, InlineImage};
 use replay_core_v4::seal::image_url_key;
 use replay_core_v4::url_policy::{is_remote, MAX_URL_LEN};
+use replay_core_v4::v4_image_refs::{bundled_font_ref, ImageDecline, IMAGE_DECLINED_PREFIX};
 
 use crate::urls::url_reference;
 
@@ -208,7 +206,7 @@ impl AssetRewrite {
                 reason: "none",
             },
             Err(decline) => Decision {
-                text: declined_url_ref(asset, decline.into()),
+                text: declined_url_ref(asset, decline),
                 outcome: "declined",
                 reason: decline.label(),
             },
