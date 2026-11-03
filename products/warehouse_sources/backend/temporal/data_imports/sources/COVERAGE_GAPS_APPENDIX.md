@@ -8632,10 +8632,10 @@ Diffed against: <https://raw.githubusercontent.com/okta/okta-management-openapi-
 - [x] `apps/{appId}/users` — Application assignment per user (with scope, status and credentials profile) — the core access-review question (high). Added as `application_users`.
 - [x] `apps/{appId}/groups` — Group-based application assignment, the other half of how access is actually granted (high). Added as `application_groups`.
 - [x] `users/{userId}/factors and users/{userId}/authenticator-enrollments` — Enrolled MFA factors per user — the standard security-posture report over an Okta sync (high). Added `users/{userId}/factors` as `user_factors`; `authenticator-enrollments` is skipped because it is Identity Engine only and would repeat the per-user fan-out for overlapping enrollment data.
-- [ ] `policies and policies/{policyId}/rules` — Sign-on, password and authenticator policies plus their rules; explains why the logs table shows the auth outcomes it does (medium)
-- [ ] `devices and devices/{deviceId}/users` — Managed device inventory plus the device↔user junction, needed for device-trust and BYOD analysis (medium)
-- [ ] `iam/roles, users/{userId}/roles, groups/{groupId}/roles` — Standard and custom admin-role assignments — privileged-access reporting over users and groups we already sync (medium)
-- [ ] `idps and idps/{idpId}/users` — Identity providers plus the linked external identities, resolving federated logins seen in logs (medium)
+- [x] `policies and policies/{policyId}/rules` — Sign-on, password and authenticator policies plus their rules; explains why the logs table shows the auth outcomes it does (medium). Added as `policies` and `policy_rules`; both read every policy type, because the list endpoint requires `type`.
+- [x] `devices and devices/{deviceId}/users` — Managed device inventory plus the device↔user junction, needed for device-trust and BYOD analysis (medium). Added as `devices` and `device_users` (Identity Engine only).
+- [x] `iam/roles, users/{userId}/roles, groups/{groupId}/roles` — Standard and custom admin-role assignments — privileged-access reporting over users and groups we already sync (medium). Added as `custom_roles`, `user_role_assignments` and `group_role_assignments`.
+- [x] `idps and idps/{idpId}/users` — Identity providers plus the linked external identities, resolving federated logins seen in logs (medium). Added as `identity_providers` (without `protocol.credentials`) and `identity_provider_users`.
 - [ ] `authenticators (and /methods)` — Lookup that resolves factor/authenticator type ids appearing in enrollments and policy rules (medium)
 - [ ] `authorizationServers with /scopes, /claims and /policies` — Custom auth servers and their scopes/claims, needed to interpret OAuth token events in logs (medium)
 - [ ] `users/{userId}/grants and apps/{appId}/grants` — OAuth consent grants per user and per app — who has consented to which scopes (medium)
@@ -10389,10 +10389,10 @@ Diffed against: <https://developer.rocketlane.com/reference/get-all-projects>
 - [x] `invoices/{id}/line-items (get-invoice-line-items)` — line-item revenue breakdown against projects and tasks (high). Synced as `invoice_line_items` from `/invoices/{invoiceId}/lines`, one fetch per invoice.
 - [x] `time-entry-categories (get-time-entry-categories)` — lookup table resolving the category IDs carried on time_entries we already sync (high). Synced as `time_entry_categories` from `/time-entries/categories`.
 - [x] `phases (get-all-phases)` — lookup table resolving the phase IDs on tasks and projects we already sync (high). Synced as `phases`, one fetch per project, because `/phases` requires a `projectId` filter.
-- [ ] `resource-allocations (get-all-resource-allocations)` — planned capacity to compare against logged time entries (high)
-- [ ] `invoices/{id}/payments (get-invoice-payments)` — cash collection and AR aging (medium)
-- [ ] `time-offs (get-all-timeoffs)` — needed for correct utilization and availability math (medium)
-- [ ] `spaces (get-all-spaces)` — lookup resolving the space grouping projects and documents belong to (medium)
+- [x] `resource-allocations (get-all-resource-allocations)` — planned capacity to compare against logged time entries (high). Synced as `resource_allocations` with one wide `startDate`/`endDate` window, because the endpoint requires both.
+- [x] `invoices/{id}/payments (get-invoice-payments)` — cash collection and AR aging (medium). Synced as `invoice_payments`, one fetch per invoice.
+- [x] `time-offs (get-all-timeoffs)` — needed for correct utilization and availability math (medium). Synced as `time_offs`.
+- [x] `spaces (get-all-spaces)` — lookup resolving the space grouping projects and documents belong to (medium). Synced as `spaces`, one fetch per project, because `/spaces` requires a `projectId` filter.
 - [ ] `placeholders (get-placeholders)` — unfilled roles on allocations, useful for staffing gap reporting (low)
 - [ ] `space-documents (get-all-space-documents)` — document inventory per space (low)
 
