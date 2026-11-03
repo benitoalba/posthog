@@ -37,6 +37,7 @@ from products.data_modeling.backend.facade.models import (
     Edge,
     Node,
     NodeType,
+    is_raw_managed_trino_query,
 )
 from products.data_tools.backend.facade.models import DataWarehouseJoin
 from products.data_tools.backend.models.datawarehouse_saved_query_folder import DataWarehouseSavedQueryFolder
@@ -2832,6 +2833,20 @@ class TestSavedQuery(APIBaseTest):
         view.refresh_from_db()
         assert (response.status_code, response.json()["detail"]) == (400, INCREMENTAL_CONFIG_CHANGED_REFUSAL)
         assert view.query != new_query
+
+
+class TestIsRawManagedTrinoQuery(SimpleTestCase):
+    @parameterized.expand(
+        [
+            ("raw", True, True),
+            ("hogql", None, False),
+            ("string_false", "false", False),
+            ("string_true", "true", False),
+        ]
+    )
+    def test_only_a_json_true_marks_a_raw_trino_view(self, _name: str, send_raw: object, expected: bool) -> None:
+        query = {"query": "SELECT 1", "executionTarget": "managed_trino", "sendRawQuery": send_raw}
+        self.assertEqual(is_raw_managed_trino_query(query), expected)
 
 
 class TestSavedQueryNameValidation(SimpleTestCase):
