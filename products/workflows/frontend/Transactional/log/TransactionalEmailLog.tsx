@@ -1,23 +1,79 @@
 import { useActions, useValues } from 'kea'
 import { router } from 'kea-router'
 
-import { IconCursorClick, IconEye } from '@posthog/icons'
+import { IconCursorClick, IconEye, IconRefresh, IconSearch } from '@posthog/icons'
 import { LemonBanner, LemonButton, LemonInput, LemonSelect, LemonTag, Tooltip } from '@posthog/lemon-ui'
 
+import { DateFilter } from 'lib/components/DateFilter/DateFilter'
 import { TZLabel } from 'lib/components/TZLabel'
 import { LemonTable } from 'lib/lemon-ui/LemonTable'
 import { LemonTableLink } from 'lib/lemon-ui/LemonTable/LemonTableLink'
+import { CUSTOM_OPTION_KEY } from 'lib/utils/dateFilters'
+import { DATE_TIME_FORMAT, formatDateRange } from 'lib/utils/datetime'
 import { urls } from 'scenes/urls'
+
+import { DateMappingOption } from '~/types'
 
 import type { TransactionalEmailLogEntryApi } from 'products/messaging/frontend/generated/api.schemas'
 
 import { messageTemplatesLogic } from '../../TemplateLibrary/messageTemplatesLogic'
 import { EMAIL_STATUS_DESCRIPTION, EMAIL_STATUS_LABEL, EMAIL_STATUS_TAG, emailReasonText } from './emailLogStatus'
-import { LOG_DATE_RANGES, transactionalEmailLogLogic } from './transactionalEmailLogLogic'
+import { DEFAULT_LOG_FILTERS, LOG_RETENTION_DAYS, transactionalEmailLogLogic } from './transactionalEmailLogLogic'
+
+const LOG_DATE_OPTIONS: DateMappingOption[] = [
+    { key: CUSTOM_OPTION_KEY, values: [] },
+    {
+        key: 'Last 1 hour',
+        values: ['-1h'],
+        getFormattedDate: (date) => date.subtract(1, 'hour').format(DATE_TIME_FORMAT),
+        defaultInterval: 'hour',
+    },
+    {
+        key: 'Last 24 hours',
+        values: ['-24h'],
+        getFormattedDate: (date) => date.subtract(24, 'hour').format(DATE_TIME_FORMAT),
+        defaultInterval: 'hour',
+    },
+    {
+        key: 'Last 7 days',
+        values: ['-7d'],
+        getFormattedDate: (date) => formatDateRange(date.subtract(7, 'd'), date.endOf('d')),
+        defaultInterval: 'day',
+    },
+    {
+        key: 'Last 30 days',
+        values: ['-30d'],
+        getFormattedDate: (date) => formatDateRange(date.subtract(30, 'd'), date.endOf('d')),
+        defaultInterval: 'day',
+    },
+]
+
+/** Lets a long address wrap before its domain instead of mid-word. */
+function EmailAddress({ address }: { address: string }): JSX.Element {
+    if (!address) {
+        return <span className="text-secondary">Unknown recipient</span>
+    }
+    const at = address.lastIndexOf('@')
+    if (at <= 0) {
+        return <span className="break-all">{address}</span>
+    }
+    return (
+        <span className="break-words">
+            {address.slice(0, at)}
+            <wbr />
+            {address.slice(at)}
+        </span>
+    )
+}
+
+const STATUS_OPTIONS = (['delivered', 'sent', 'queued', 'bounced', 'complained', 'failed'] as const).map((status) => ({
+    value: status,
+    label: EMAIL_STATUS_LABEL[status],
+}))
 
 export function TransactionalEmailLog(): JSX.Element {
-    const { emails, pageLoading, pageFailed, hasMore, filters, isFiltered } = useValues(transactionalEmailLogLogic)
-    const { setFilters, loadMore, loadEmails } = useActions(transactionalEmailLogLogic)
+    const { emails, pageLoading, pageFailed, filters, isFiltered, pagination } = useValues(transactionalEmailLogLogic)
+    const { setFilters, setPage, loadEmails } = useActions(transactionalEmailLogLogic)
     const { transactionalTemplates } = useValues(messageTemplatesLogic)
 
     const emailOptions = transactionalTemplates
@@ -29,41 +85,63 @@ export function TransactionalEmailLog(): JSX.Element {
 
     return (
         <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-                <LemonInput
-                    type="search"
-                    placeholder="Search by recipient or message ID"
-                    value={filters.search}
-                    onChange={(search) => setFilters({ search })}
-                    className="min-w-60 flex-1 max-w-100"
-                    data-attr="transactional-email-log-search"
-                />
-                <LemonSelect
-                    size="small"
-                    value={filters.workflowId}
-                    onChange={(workflowId) => setFilters({ workflowId })}
-                    options={[{ value: null, label: 'All emails' }, ...emailOptions]}
-                    data-attr="transactional-email-log-email-filter"
-                />
-                <LemonSelect
-                    size="small"
-                    value={filters.status}
-                    onChange={(status) => setFilters({ status })}
-                    options={[
-                        { value: null, label: 'Any status' },
-                        ...(['delivered', 'sent', 'queued', 'bounced', 'complained', 'failed'] as const).map(
-                            (status) => ({ value: status, label: EMAIL_STATUS_LABEL[status] })
-                        ),
-                    ]}
-                    data-attr="transactional-email-log-status-filter"
-                />
-                <LemonSelect
-                    size="small"
-                    value={filters.days}
-                    onChange={(days) => setFilters({ days })}
-                    options={LOG_DATE_RANGES.map((range) => ({ value: range.value, label: range.label }))}
-                    data-attr="transactional-email-log-date-filter"
-                />
+            <div className="flex flex-wrap items-center gap-2 justify-between">
+                <div className="flex items-center gap-2 flex-1 min-w-60">
+                    <LemonInput
+                        type="search"
+                        size="small"
+                        placeholder="Search by recipient or message ID"
+                        fullWidth
+                        value={filters.search}
+                        onChange={(search) => setFilters({ search })}
+                        prefix={<IconSearch />}
+                        allowClear
+                        data-attr="transactional-email-log-search"
+                    />
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <LemonSelect
+                        size="small"
+                        dropdownMatchSelectWidth={false}
+                        value={filters.workflowId}
+                        onChange={(workflowId) => setFilters({ workflowId })}
+                        options={[{ value: null, label: 'All emails' }, ...emailOptions]}
+                        data-attr="transactional-email-log-email-filter"
+                    />
+                    <LemonSelect
+                        size="small"
+                        dropdownMatchSelectWidth={false}
+                        value={filters.status}
+                        onChange={(status) => setFilters({ status })}
+                        options={[{ value: null, label: 'Any status' }, ...STATUS_OPTIONS]}
+                        data-attr="transactional-email-log-status-filter"
+                    />
+                    <DateFilter
+                        size="small"
+                        dateFrom={filters.dateFrom}
+                        dateTo={filters.dateTo ?? undefined}
+                        onChange={(dateFrom, dateTo) =>
+                            setFilters({ dateFrom: dateFrom || DEFAULT_LOG_FILTERS.dateFrom, dateTo: dateTo || null })
+                        }
+                        dateOptions={LOG_DATE_OPTIONS}
+                        allowTimePrecision
+                        allowFixedRangeWithTime
+                        allowedRollingDateOptions={['hours', 'days']}
+                        max={LOG_RETENTION_DAYS}
+                        use24HourFormat
+                        data-attr="transactional-email-log-date-filter"
+                    />
+                    <LemonButton
+                        type="secondary"
+                        size="small"
+                        icon={<IconRefresh />}
+                        loading={pageLoading}
+                        onClick={() => loadEmails()}
+                        data-attr="transactional-email-log-refresh"
+                    >
+                        Refresh
+                    </LemonButton>
+                </div>
             </div>
             {pageFailed && (
                 <LemonBanner
@@ -81,6 +159,15 @@ export function TransactionalEmailLog(): JSX.Element {
                 dataSource={emails}
                 loading={pageLoading}
                 rowKey="message_id"
+                pagination={{
+                    ...pagination,
+                    onBackward:
+                        pagination.currentPage && pagination.currentPage > 1
+                            ? () => setPage(filters.page - 1)
+                            : undefined,
+                    onForward: pagination.entryCountIsLowerBound ? () => setPage(filters.page + 1) : undefined,
+                }}
+                nouns={['send', 'sends']}
                 data-attr="transactional-email-log-table"
                 onRow={(email) => ({
                     onClick: () => router.actions.push(urls.transactionalEmailLogEntry(email.message_id)),
@@ -93,7 +180,7 @@ export function TransactionalEmailLog(): JSX.Element {
                         render: (_, email) => (
                             <LemonTableLink
                                 to={urls.transactionalEmailLogEntry(email.message_id)}
-                                title={<span className="break-all">{email.recipient || 'Unknown recipient'}</span>}
+                                title={<EmailAddress address={email.recipient} />}
                             />
                         ),
                     },
@@ -139,7 +226,7 @@ export function TransactionalEmailLog(): JSX.Element {
                             ) : null,
                     },
                     {
-                        title: 'Time',
+                        title: 'Sent',
                         key: 'created_at',
                         width: 0,
                         render: (_, email) => <TZLabel time={email.created_at} className="whitespace-nowrap" />,
@@ -153,19 +240,6 @@ export function TransactionalEmailLog(): JSX.Element {
                           : 'No transactional emails sent in this period. Sends from your code show up here within a few seconds.'
                 }
             />
-            {hasMore && (
-                <div className="flex justify-center">
-                    <LemonButton
-                        type="secondary"
-                        size="small"
-                        onClick={loadMore}
-                        loading={pageLoading}
-                        data-attr="transactional-email-log-load-more"
-                    >
-                        Load more
-                    </LemonButton>
-                </div>
-            )}
         </div>
     )
 }

@@ -23,11 +23,13 @@ export function TransactionalEmailRendered({ email }: { email: TransactionalEmai
         )
     }
     return (
-        <div className="border rounded bg-surface-primary overflow-hidden">
-            <div className="px-4 py-2 border-b text-sm">
-                <span className="text-secondary">Subject: </span>
-                <span className="font-medium">{email.subject}</span>
-            </div>
+        <section className="border rounded bg-surface-primary overflow-hidden">
+            <dl className="m-0 px-4 py-3 border-b grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                <dt className="text-secondary">To</dt>
+                <dd className="m-0 truncate">{email.recipient}</dd>
+                <dt className="text-secondary">Subject</dt>
+                <dd className="m-0 font-semibold truncate">{email.subject || '(no subject)'}</dd>
+            </dl>
             {/* sandbox="" disables scripts so the captured email HTML can't run anything. */}
             <iframe
                 title="Rendered email"
@@ -35,6 +37,6 @@ export function TransactionalEmailRendered({ email }: { email: TransactionalEmai
                 src={getMessageAssetContentUrl(email.workflow_id, email.message_id, email.action_id)}
                 className="w-full h-[70vh] bg-white block"
             />
-        </div>
+        </section>
     )
 }

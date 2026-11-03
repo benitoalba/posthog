@@ -4,70 +4,72 @@ import { CopyToClipboardInline } from 'lib/components/CopyToClipboard'
 import { TZLabel } from 'lib/components/TZLabel'
 import { urls } from 'scenes/urls'
 
-import { PersonsTabType } from '~/types'
-
 import type { TransactionalEmailLogDetailApi } from 'products/messaging/frontend/generated/api.schemas'
 
-import { EMAIL_STATUS_DESCRIPTION, EMAIL_STATUS_LABEL, EMAIL_STATUS_TAG, emailReasonText } from './emailLogStatus'
+import { EMAIL_STATUS_DESCRIPTION, EMAIL_STATUS_LABEL, EMAIL_STATUS_TAG } from './emailLogStatus'
 
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+function DetailRow({
+    label,
+    stacked = false,
+    children,
+}: {
+    label: string
+    /** Puts the value under the label, for long values such as IDs. */
+    stacked?: boolean
+    children: React.ReactNode
+}): JSX.Element {
     return (
-        <div className="flex flex-col gap-0.5">
-            <dt className="text-xs text-secondary">{label}</dt>
-            <dd className="text-sm m-0 break-words min-w-0">{children}</dd>
+        <div
+            className={
+                stacked ? 'flex flex-col gap-0.5 text-sm' : 'flex justify-between items-baseline gap-4 text-sm min-w-0'
+            }
+        >
+            <dt className="text-secondary shrink-0">{label}</dt>
+            <dd className={stacked ? 'm-0' : 'm-0 min-w-0 text-right truncate'}>{children}</dd>
         </div>
     )
 }
 
 export function TransactionalEmailDetails({ email }: { email: TransactionalEmailLogDetailApi }): JSX.Element {
-    const reason = emailReasonText(email.reason)
     return (
-        <dl className="border rounded bg-surface-primary p-4 flex flex-col gap-3 m-0">
-            <DetailRow label="Status">
-                <div className="flex flex-col gap-1 items-start">
+        <section className="border rounded bg-surface-primary p-4 flex flex-col gap-3">
+            <h3 className="text-sm font-semibold m-0">Details</h3>
+            <dl className="flex flex-col gap-2 m-0">
+                <DetailRow label="Status">
                     <Tooltip title={EMAIL_STATUS_DESCRIPTION[email.status]}>
                         <LemonTag type={EMAIL_STATUS_TAG[email.status]}>{EMAIL_STATUS_LABEL[email.status]}</LemonTag>
                     </Tooltip>
-                    {reason && <span className="text-secondary">{reason}</span>}
-                </div>
-            </DetailRow>
-            <DetailRow label="Email">
-                {email.template_id ? (
-                    <Link to={urls.transactionalTemplate(email.template_id)}>
-                        {email.template_name || 'Unnamed email'}
-                    </Link>
-                ) : (
-                    <span className="text-secondary">Deleted email</span>
-                )}
-            </DetailRow>
-            <DetailRow label="Queued">
-                <TZLabel time={email.created_at} />
-            </DetailRow>
-            {email.sending_domain && <DetailRow label="Sending domain">{email.sending_domain}</DetailRow>}
-            <DetailRow label="Message ID">
-                <CopyToClipboardInline description="message ID" explicitValue={email.message_id} iconSize="xsmall">
-                    <span className="font-mono text-xs break-all">{email.message_id}</span>
-                </CopyToClipboardInline>
-            </DetailRow>
-            {email.distinct_id && (
-                <DetailRow label="Person">
-                    <div className="flex flex-col gap-1">
-                        <Link
-                            to={urls.personByDistinctId(email.distinct_id)}
-                            className="break-all"
-                            data-attr="transactional-email-log-person"
-                        >
-                            {email.distinct_id}
-                        </Link>
-                        <Link
-                            to={`${urls.personByDistinctId(email.distinct_id)}#activeTab=${PersonsTabType.SESSION_RECORDINGS}`}
-                            data-attr="transactional-email-log-recordings"
-                        >
-                            View their recordings
-                        </Link>
-                    </div>
                 </DetailRow>
-            )}
-        </dl>
+                <DetailRow label="Email">
+                    {email.template_id ? (
+                        <Link to={urls.transactionalTemplate(email.template_id)}>
+                            {email.template_name || 'Unnamed email'}
+                        </Link>
+                    ) : (
+                        <span className="text-secondary">Deleted email</span>
+                    )}
+                </DetailRow>
+                <DetailRow label="Queued">
+                    <TZLabel time={email.created_at} />
+                </DetailRow>
+                {email.sending_domain && <DetailRow label="Sending domain">{email.sending_domain}</DetailRow>}
+                {email.distinct_id && (
+                    <DetailRow label="Distinct ID" stacked>
+                        <CopyToClipboardInline
+                            description="distinct ID"
+                            explicitValue={email.distinct_id}
+                            iconSize="xsmall"
+                        >
+                            <span className="font-mono text-xs">{email.distinct_id}</span>
+                        </CopyToClipboardInline>
+                    </DetailRow>
+                )}
+                <DetailRow label="Message ID" stacked>
+                    <CopyToClipboardInline description="message ID" explicitValue={email.message_id} iconSize="xsmall">
+                        <span className="font-mono text-xs">{email.message_id}</span>
+                    </CopyToClipboardInline>
+                </DetailRow>
+            </dl>
+        </section>
     )
 }
