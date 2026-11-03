@@ -1,10 +1,10 @@
 //! Moves inline images out of a v4 block. Each raster data URI becomes an `image:v4` reference, and its decoded bytes
 //! go to the flush's image pack. An image the image scrub cannot read, or one over a cap, becomes an [`ImageDecline`]
-//! marker.
+//! marker. An SVG data URI stays inline, because SVG is text that the text scrub reads in place.
 //!
-//! The scan is one pass over the colons, for `data:image/` in any case. A data URI looks the same in an attribute, a CSS `url()`, a
-//! `srcset` candidate or stylesheet text, so the scan needs no knowledge of where it sits. Every other byte is
-//! copied as it is. An SVG data URI stays inline, because SVG is text that the text scrub reads in place.
+//! [`inline_image`] reads one data URI. The writer gives it each data URI of an image slot, whose extent the slot
+//! knows, and [`extract_images`] finds the rest: a pass over the colons for `data:image/` in any case, which copies
+//! every other byte as it is.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -276,25 +276,6 @@ fn wrapped_end(bytes: &[u8], mut end: usize) -> (usize, bool) {
     (end, readable)
 }
 
-fn wrapped_payload(bytes: &[u8], start: usize, end: usize) -> Vec<u8> {
-    let mut base64 = Vec::with_capacity(end - start);
-    let mut rest = &bytes[start..end];
-    loop {
-        rest = match rest {
-            [b'\\', b'u', b'0', b'0', b'2', b'f' | b'F', tail @ ..] | [b'\\', b'/', tail @ ..] => {
-                base64.push(b'/');
-                tail
-            }
-            [b'\\', _, tail @ ..] | [b' ' | b'\t' | b'\n' | b'\r', tail @ ..] => tail,
-            [byte, tail @ ..] => {
-                base64.push(*byte);
-                tail
-            }
-            [] => return base64,
-        };
-    }
-}
-
 /// Where a data URI ends whose payload is not base64: at the end of its JSON string, at the quote or parenthesis that
 /// opened it, or at whitespace when no quote opened it. A URL may hold a bare `'` or `)`, so a quoted URI ends only at its own quote.
 fn uri_end(bytes: &[u8], start: usize, from: usize) -> usize {
@@ -332,10 +313,68 @@ fn uri_end(bytes: &[u8], start: usize, from: usize) -> usize {
     bytes.len()
 }
 
-fn percent_decoded(raw: &[u8]) -> Option<Vec<u8>> {
+fn json_text(raw: &[u8]) -> Option<String> {
     let quoted = [b"\"".as_slice(), raw, b"\""].concat();
-    let text = scan::unescape(&quoted, (0, quoted.len())).ok()?;
-    Some(percent_encoding::percent_decode(text.as_bytes()).collect())
+    scan::unescape(&quoted, (0, quoted.len()))
+        .ok()
+        .map(Cow::into_owned)
+}
+
+pub fn is_data_url(text: &str) -> bool {
+    text.get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InlineImage {
+    NotImage,
+    Svg,
+    /// The image's reference, or the marker of why the block does not store it.
+    Replaced(String),
+}
+
+/// The one place a data URI becomes a reference, with the rules of v3 `collectable_data_uri_bytes`: the media type and
+/// `base64` in any case, and any parameters before the comma. A base64 payload loses its whitespace, as in a browser.
+pub fn inline_image(data_uri: &str, sink: &mut ImageSink<'_>) -> InlineImage {
+    let data_uri = data_uri.trim();
+    let Some((meta, payload)) = data_uri
+        .get(5..)
+        .filter(|_| is_data_url(data_uri))
+        .and_then(|rest| rest.split_once(','))
+    else {
+        return InlineImage::NotImage;
+    };
+    let meta = meta.to_ascii_lowercase();
+    let Some(subtype) = meta
+        .split(';')
+        .next()
+        .and_then(|t| t.strip_prefix("image/"))
+    else {
+        return InlineImage::NotImage;
+    };
+    if subtype.starts_with("svg") {
+        return InlineImage::Svg;
+    }
+    let base64 = meta.contains("base64");
+    let payload: Vec<u8> = if base64 {
+        payload
+            .bytes()
+            .filter(|b| !b.is_ascii_whitespace())
+            .collect()
+    } else {
+        percent_encoding::percent_decode(payload.as_bytes()).collect()
+    };
+    if payload.is_empty() {
+        return InlineImage::NotImage;
+    }
+    // The label or the bytes can name AVIF, so both count.
+    InlineImage::Replaced(if subtype.starts_with("avif") {
+        sink.decline(ImageDecline::Avif)
+    } else if base64 {
+        sink.take_base64(&payload)
+    } else {
+        sink.take(payload)
+    })
 }
 
 enum Meta {
@@ -375,8 +414,7 @@ fn read_meta(bytes: &[u8], start: usize) -> Meta {
     }
 }
 
-/// Reads the data URI whose `data:` starts at `start`, with the rules of v3 `collectable_data_uri_bytes`: the media
-/// type and `base64` in any case, and any parameters before the comma.
+/// Finds where the data URI whose `data:` starts at `start` ends, and reads it with [`inline_image`].
 fn read_data_uri(bytes: &[u8], start: usize, sink: &mut ImageSink<'_>) -> DataUri {
     let meta_start = start + b"data:".len();
     let (meta, comma) = match read_meta(bytes, meta_start) {
@@ -391,47 +429,52 @@ fn read_data_uri(bytes: &[u8], start: usize, sink: &mut ImageSink<'_>) -> DataUr
         }
         _ => return DataUri::NotImage,
     };
-    let media_type = meta.split(';').next().unwrap_or_default();
-    let subtype = &media_type["image/".len()..];
-    if subtype.starts_with("svg") {
+    if meta["image/".len()..].starts_with("svg") {
         return DataUri::Svg;
     }
     let payload_start = comma + 1;
-    if !meta.contains("base64") {
-        let end = uri_end(bytes, start, payload_start);
-        let replacement = match &bytes[payload_start..end] {
-            [] => return DataUri::NotImage,
-            _ if subtype.starts_with("avif") => sink.decline(ImageDecline::Avif),
-            raw => match percent_decoded(raw) {
-                Some(image) => sink.take(image),
-                None => sink.decline(ImageDecline::Undecodable),
-            },
-        };
-        return DataUri::Replaced { replacement, end };
-    }
-    let run_end = bytes[payload_start..]
-        .iter()
-        .position(|&b| !is_base64(b))
-        .map_or(bytes.len(), |length| payload_start + length);
-    let (end, readable) = if continues_past(bytes, run_end) {
-        wrapped_end(bytes, run_end)
+    let (end, readable) = if meta.contains("base64") {
+        let run_end = bytes[payload_start..]
+            .iter()
+            .position(|&b| !is_base64(b))
+            .map_or(bytes.len(), |length| payload_start + length);
+        if continues_past(bytes, run_end) {
+            wrapped_end(bytes, run_end)
+        } else {
+            (run_end, true)
+        }
     } else {
-        (run_end, true)
+        (uri_end(bytes, start, payload_start), true)
     };
-    if end == payload_start {
-        return DataUri::NotImage;
-    }
-    // The label or the bytes can name AVIF, so both count.
-    let replacement = if subtype.starts_with("avif") {
-        sink.decline(ImageDecline::Avif)
-    } else if !readable {
-        sink.decline(ImageDecline::Undecodable)
-    } else if end == run_end {
-        sink.take_base64(&bytes[payload_start..end])
-    } else {
-        sink.take_base64(&wrapped_payload(bytes, payload_start, end))
+    let uri = json_text(&bytes[start..end]).filter(|_| readable);
+    let replacement = match uri.map(|uri| inline_image(&uri, sink)) {
+        Some(InlineImage::Replaced(replacement)) => replacement,
+        Some(InlineImage::NotImage | InlineImage::Svg) => return DataUri::NotImage,
+        None => sink.decline(ImageDecline::Undecodable),
     };
     DataUri::Replaced { replacement, end }
+}
+
+/// Whether a data URI can start at `start`: where a JSON string, a quote, a CSS `url(`, a srcset candidate or a word
+/// of text starts. A `data:` inside a longer URL, as in `https://cdn.example.com/data:image/png;base64,…`, belongs to
+/// that URL, so it stays.
+fn starts_data_uri(bytes: &[u8], start: usize) -> bool {
+    let Some(before) = start.checked_sub(1) else {
+        return true;
+    };
+    match bytes[before] {
+        b'"' | b'\'' | b'(' | b',' | b'=' | b' ' | b'\t' => true,
+        b'n' | b'r' | b't' => {
+            bytes[..before]
+                .iter()
+                .rev()
+                .take_while(|&&b| b == b'\\')
+                .count()
+                % 2
+                == 1
+        }
+        _ => false,
+    }
 }
 
 /// Replaces every inline image in `bytes` but SVG with its reference or a marker. Returns the input unchanged when it holds none.
@@ -446,9 +489,7 @@ pub fn extract_images<'b>(bytes: &'b [u8], sink: &mut ImageSink<'_>) -> Cow<'b, 
         };
         if start < copied_to
             || !bytes[start..colon].eq_ignore_ascii_case(b"data")
-            || start
-                .checked_sub(1)
-                .is_some_and(|before| bytes[before].is_ascii_alphanumeric())
+            || !starts_data_uri(bytes, start)
         {
             continue;
         }
@@ -475,12 +516,12 @@ pub fn extract_images<'b>(bytes: &'b [u8], sink: &mut ImageSink<'_>) -> Cow<'b, 
 /// Whether the scan keeps the image of this data URI, as a reference or inline as an SVG, by the rules for one image.
 /// A message past its caps can still decline it.
 pub fn keeps_inline_image(data_uri: &str) -> bool {
-    let mut json = Vec::with_capacity(data_uri.len() + 2);
-    scan::write_json_string(data_uri, &mut json);
     let mut sink = ImageSink::new(&[0; 32], 0, "", ImageLimits::default());
-    extract_images(&json, &mut sink);
-    sink.declined == [0; ImageDecline::ALL.len()]
-        && (!sink.images.is_empty() || sink.left_inline > 0)
+    match inline_image(data_uri, &mut sink) {
+        InlineImage::Svg => true,
+        InlineImage::Replaced(_) => sink.declined == [0; ImageDecline::ALL.len()],
+        InlineImage::NotImage => false,
+    }
 }
 
 #[cfg(test)]

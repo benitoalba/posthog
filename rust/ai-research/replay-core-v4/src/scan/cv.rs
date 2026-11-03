@@ -7,6 +7,7 @@ use std::io::Read;
 
 use crate::bytescan::{self as scan, Span};
 use crate::compression;
+use crate::inspect::assets::{AssetContext, AssetSlot, Buffer};
 use serde::de::IgnoredAny;
 
 use super::canvas::{self, CanvasImage};
@@ -360,62 +361,138 @@ impl Message {
     }
 }
 
-/// Builds the output of one event, copying unchanged bytes only once something changes.
-struct Output<'b> {
-    bytes: &'b [u8],
-    start: usize,
-    end: usize,
-    copied_to: usize,
-    out: Option<Vec<u8>>,
+/// A slot names bytes that are not a whole JSON string of its event, or a string another slot also covers. Only a bug
+/// in the inspector does that, so the writer drops the block rather than store a URL it may not have replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotMismatch;
+
+struct Edit {
+    span: Span,
+    with: Vec<u8>,
 }
 
-impl<'b> Output<'b> {
-    fn new(bytes: &'b [u8], span: Span) -> Self {
-        Self {
-            bytes,
-            start: span.0,
-            end: span.1,
-            copied_to: span.0,
-            out: None,
+/// The edits of the slots in one buffer, sorted by position. Each slot's string becomes what `edit` returns for it.
+fn slot_edits<'k>(
+    bytes: &[u8],
+    within: Span,
+    slots: &mut dyn Iterator<Item = &AssetSlot>,
+    sink: &mut ImageSink<'k>,
+    edit: &mut impl FnMut(&str, &AssetContext, &mut ImageSink<'k>) -> Option<String>,
+) -> Result<Vec<Edit>, SlotMismatch> {
+    let mut slots: Vec<&AssetSlot> = slots.collect();
+    slots.sort_by_key(|slot| slot.span);
+    slots.dedup_by_key(|slot| slot.span);
+    let mut edits = Vec::new();
+    let mut previous_end = within.0;
+    for slot in slots {
+        let (start, end) = slot.span;
+        if start < previous_end
+            || end > within.1
+            || end < start + 2
+            || !scan::is_string(bytes, slot.span)
+        {
+            return Err(SlotMismatch);
+        }
+        previous_end = end;
+        let text = scan::unescape(bytes, slot.span).map_err(|_| SlotMismatch)?;
+        if let Some(replacement) = edit(&text, &slot.context, sink) {
+            let mut with = Vec::with_capacity(replacement.len() + 2);
+            scan::write_json_string(&replacement, &mut with);
+            edits.push(Edit {
+                span: slot.span,
+                with,
+            });
         }
     }
-
-    fn changed(&mut self) -> &mut Vec<u8> {
-        let (bytes, start, end, copied_to) = (self.bytes, self.start, self.end, self.copied_to);
-        self.out.get_or_insert_with(|| {
-            let mut out = Vec::with_capacity(end - start);
-            out.extend_from_slice(&bytes[start..copied_to]);
-            out
-        })
-    }
-
-    fn copy_to(&mut self, end: usize) {
-        if let Some(out) = self.out.as_mut() {
-            out.extend_from_slice(&self.bytes[self.copied_to..end]);
-        }
-        self.copied_to = end;
-    }
-
-    fn replace(&mut self, span: Span, with: &[u8]) {
-        self.copy_to(span.0);
-        self.changed().extend_from_slice(with);
-        self.copied_to = span.1;
-    }
+    Ok(edits)
 }
 
-/// The event as a v4 block stores it, or `None` when that is the event as it arrived. Inline images become references,
-/// and the compressed strings of a `cv` event are expanded to JSON, without the `cv` marker. An event whose strings
-/// do not decode keeps its `cv` strings and its images. The stored event has no raw line break, and its strings hold
-/// only the escapes that `write_json_string` writes.
-pub fn extract_event_images(
+fn copy_edited(bytes: &[u8], range: Span, edits: &[Edit], out: &mut Vec<u8>) {
+    let first = edits.partition_point(|edit| edit.span.0 < range.0);
+    let mut copied_to = range.0;
+    for edit in edits[first..]
+        .iter()
+        .take_while(|edit| edit.span.1 <= range.1)
+    {
+        out.extend_from_slice(&bytes[copied_to..edit.span.0]);
+        out.extend_from_slice(&edit.with);
+        copied_to = edit.span.1;
+    }
+    out.extend_from_slice(&bytes[copied_to..range.1]);
+}
+
+fn edited(bytes: &[u8], range: Span, edits: &[Edit]) -> Option<Vec<u8>> {
+    if edits.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(range.1 - range.0);
+    copy_edited(bytes, range, edits, &mut out);
+    Some(out)
+}
+
+/// The event as a v4 block stores it, or `None` when that is the event as it arrived. Each asset slot holds what
+/// `edit` returns for its string, inline images become references, and the compressed strings of a `cv` event are
+/// expanded to JSON, without the `cv` marker. An event whose strings do not decode keeps its `cv` strings and its
+/// images. The stored event has no raw line break, and its strings hold only the escapes that `write_json_string`
+/// writes.
+pub fn stored_event<'k>(
     inner: &[u8],
     event: &Event,
-    sink: &mut ImageSink<'_>,
-) -> Option<Vec<u8>> {
-    let (mut stored, takes_images) = match &*expansion(inner, event) {
-        Expansion::Failed | Expansion::Skipped => (None, false),
-        Expansion::Decoded(fields) => (Some(expanded(inner, event, fields)), true),
-        Expansion::Plain => (move_out_canvas_images(inner, event, sink), true),
+    slots: &[AssetSlot],
+    sink: &mut ImageSink<'k>,
+    edit: &mut impl FnMut(&str, &AssetContext, &mut ImageSink<'k>) -> Option<String>,
+) -> Result<Option<Vec<u8>>, SlotMismatch> {
+    let expansion = expansion(inner, event);
+    let mut inner_slots = slots.iter().filter(|slot| slot.buffer == Buffer::Inner);
+    let mut inner_edits = slot_edits(inner, event.span, &mut inner_slots, sink, edit)?;
+    let (mut stored, takes_images) = match &*expansion {
+        Expansion::Failed | Expansion::Skipped => {
+            if slots.iter().any(|slot| slot.buffer != Buffer::Inner) {
+                return Err(SlotMismatch);
+            }
+            (edited(inner, event.span, &inner_edits), false)
+        }
+        Expansion::Decoded(fields) => {
+            let mut decoded = Vec::with_capacity(fields.len());
+            for field in fields {
+                let mut field_slots = slots
+                    .iter()
+                    .filter(|slot| slot.buffer == Buffer::Decoded(field.span));
+                let json = match &field.json {
+                    Some(json) => {
+                        let edits =
+                            slot_edits(json, (0, json.len()), &mut field_slots, sink, edit)?;
+                        Some(edited(json, (0, json.len()), &edits).unwrap_or_else(|| json.clone()))
+                    }
+                    None if field_slots.next().is_some() => return Err(SlotMismatch),
+                    None => None,
+                };
+                decoded.push(Decoded {
+                    span: field.span,
+                    json,
+                });
+            }
+            if slots.iter().any(|slot| {
+                matches!(slot.buffer, Buffer::Decoded(span) if !fields.iter().any(|f| f.span == span))
+            }) {
+                return Err(SlotMismatch);
+            }
+            (Some(expanded(inner, event, &decoded, &inner_edits)), true)
+        }
+        Expansion::Plain => {
+            if slots.iter().any(|slot| slot.buffer != Buffer::Inner) {
+                return Err(SlotMismatch);
+            }
+            inner_edits.extend(canvas_image_edits(inner, event, sink));
+            inner_edits.sort_by_key(|edit| edit.span);
+            if inner_edits
+                .windows(2)
+                .any(|pair| pair[1].span.0 < pair[0].span.1)
+            {
+                return Err(SlotMismatch);
+            }
+            (edited(inner, event.span, &inner_edits), true)
+        }
     };
     let arrived = &inner[event.span.0..event.span.1];
     if let Cow::Owned(one_line) = without_line_breaks(stored.as_deref().unwrap_or(arrived)) {
@@ -429,7 +506,7 @@ pub fn extract_event_images(
             stored = Some(extracted);
         }
     }
-    stored
+    Ok(stored)
 }
 
 /// A block stores one event per line. Outside a string a line break is whitespace, so it becomes a space. In a
@@ -462,29 +539,28 @@ fn without_line_breaks(bytes: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
-fn move_out_canvas_images(
-    inner: &[u8],
-    event: &Event,
-    sink: &mut ImageSink<'_>,
-) -> Option<Vec<u8>> {
-    let mut output = Output::new(inner, event.span);
+fn canvas_image_edits(inner: &[u8], event: &Event, sink: &mut ImageSink<'_>) -> Vec<Edit> {
     let images = event.data.map_or_else(Vec::new, |data| {
         canvas::canvas_images(inner, event.kind, event.source, data)
     });
-    for image in images {
-        let replacement = match image {
-            CanvasImage::Base64(span) => match scan::unescape(inner, span) {
-                Ok(payload) => sink.take_base64(payload.as_bytes()),
-                Err(_) => sink.decline(ImageDecline::Undecodable),
-            },
-            CanvasImage::Pixels(_) => sink.decline(ImageDecline::Unsupported),
-        };
-        let mut quoted = Vec::with_capacity(replacement.len() + 2);
-        scan::write_json_string(&replacement, &mut quoted);
-        output.replace(image.span(), &quoted);
-    }
-    output.copy_to(event.span.1);
-    output.out
+    images
+        .into_iter()
+        .map(|image| {
+            let replacement = match image {
+                CanvasImage::Base64(span) => match scan::unescape(inner, span) {
+                    Ok(payload) => sink.take_base64(payload.as_bytes()),
+                    Err(_) => sink.decline(ImageDecline::Undecodable),
+                },
+                CanvasImage::Pixels(_) => sink.decline(ImageDecline::Unsupported),
+            };
+            let mut with = Vec::with_capacity(replacement.len() + 2);
+            scan::write_json_string(&replacement, &mut with);
+            Edit {
+                span: image.span(),
+                with,
+            }
+        })
+        .collect()
 }
 
 /// Writes the object at `span` entry by entry. `value` writes an entry's value, or returns false to leave the entry out.
@@ -516,7 +592,7 @@ fn write_object(
     out.push(b'}');
 }
 
-fn expanded(inner: &[u8], event: &Event, fields: &[Decoded]) -> Vec<u8> {
+fn expanded(inner: &[u8], event: &Event, fields: &[Decoded], inner_edits: &[Edit]) -> Vec<u8> {
     let mut out = Vec::with_capacity(event.span.1 - event.span.0);
     let json = |span: Span| {
         fields
@@ -540,14 +616,14 @@ fn expanded(inner: &[u8], event: &Event, fields: &[Decoded]) -> Vec<u8> {
                     match json(value) {
                         Some(Some(decoded)) => out.extend_from_slice(decoded),
                         Some(None) => return false,
-                        None => out.extend_from_slice(&inner[value.0..value.1]),
+                        None => copy_edited(inner, value, inner_edits, out),
                     }
                     true
                 });
                 return true;
             }
         }
-        out.extend_from_slice(&inner[value.0..value.1]);
+        copy_edited(inner, value, inner_edits, out);
         true
     });
     out
@@ -562,6 +638,15 @@ mod tests {
     use super::*;
     use crate::scan::images::ImageLimits;
     use crate::scan::message::read_message;
+
+    /// The event as the block stores it when the inspector found no asset slot in it.
+    fn extract_event_images(
+        inner: &[u8],
+        event: &Event,
+        sink: &mut ImageSink<'_>,
+    ) -> Option<Vec<u8>> {
+        stored_event(inner, event, &[], sink, &mut |_, _, _| None).unwrap()
+    }
 
     const KEY: [u8; 32] = [3; 32];
 

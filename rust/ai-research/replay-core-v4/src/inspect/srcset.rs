@@ -2,6 +2,7 @@
 //! for one the fetcher did not take, and each fetched image costs a scrub, so a srcset keeps one candidate: the one the
 //! screenshotter's Chromium shows, at the device pixel ratio of 1 that it renders at.
 
+use super::assets::Replacement;
 use crate::scan::images::keeps_inline_image;
 use crate::url_policy::{is_remote, try_canonicalize};
 
@@ -17,6 +18,7 @@ enum DescriptorKind {
 struct Candidate<'a> {
     index: usize,
     url: &'a str,
+    descriptor: &'a str,
     kind: DescriptorKind,
     value: f64,
 }
@@ -55,9 +57,11 @@ impl Candidate<'_> {
 pub struct KeptCandidate<'s> {
     pub index: usize,
     pub url: &'s str,
+    pub descriptor: &'s str,
     /// The srcset has no 1x candidate and no width descriptor, so HTML adds an img's non-empty `src` as a 1x candidate,
     /// which wins at the screenshot's device pixel ratio.
     pub yields_to_img_src: bool,
+    pub candidates: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +80,9 @@ pub fn kept_candidate(srcset: &str) -> Option<KeptCandidate<'_>> {
     let mut first_kind = None;
     let mut mixed = false;
     let mut kept: Option<Candidate<'_>> = None;
+    let mut candidates = 0;
     for_each_candidate(srcset, |candidate| {
+        candidates += 1;
         let kind = *first_kind.get_or_insert(candidate.kind);
         mixed |= candidate.kind != kind;
         kept = Some(match kept.take() {
@@ -87,8 +93,10 @@ pub fn kept_candidate(srcset: &str) -> Option<KeptCandidate<'_>> {
     kept.filter(|_| !mixed).map(|candidate| KeptCandidate {
         index: candidate.index,
         url: candidate.url,
+        descriptor: candidate.descriptor,
         yields_to_img_src: candidate.kind == DescriptorKind::Density
             && candidate.value != SCREENSHOT_DEVICE_PIXEL_RATIO,
+        candidates,
     })
 }
 
@@ -109,6 +117,47 @@ pub fn shown_candidate(srcset: &str, slot: SrcsetSlot) -> Option<KeptCandidate<'
         SrcsetSlot::Alone => true,
         SrcsetSlot::BesideImgSrc => !kept.yields_to_img_src,
         SrcsetSlot::UnfetchedTypeSource => !is_remote(kept.url),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrcsetRewrite {
+    pub value: String,
+    /// `trimmed` when other candidates left, `emptied` when none stays, and `None` when the one candidate stays.
+    pub outcome: Option<&'static str>,
+}
+
+/// The srcset with only the shown candidate, its URL as `asset` replaces it. `None` when the srcset is blank. A browser
+/// skips a source with no candidates and falls back to a source or an img that can load, where a declined marker in the
+/// list would show a broken image, so a declined candidate leaves too.
+pub fn rewrite_srcset(
+    srcset: &str,
+    slot: SrcsetSlot,
+    asset: impl FnOnce(&str) -> Option<Replacement>,
+) -> Option<SrcsetRewrite> {
+    if srcset.trim().is_empty() {
+        return None;
+    }
+    let emptied = SrcsetRewrite {
+        value: String::new(),
+        outcome: Some("emptied"),
+    };
+    let Some(shown) = shown_candidate(srcset, slot) else {
+        return Some(emptied);
+    };
+    let url = match asset(shown.url) {
+        Some(replacement) if replacement.declined => return Some(emptied),
+        Some(replacement) => replacement.text,
+        None => shown.url.to_owned(),
+    };
+    let value = if shown.descriptor.is_empty() {
+        url
+    } else {
+        format!("{url} {}", shown.descriptor)
+    };
+    Some(SrcsetRewrite {
+        value,
+        outcome: (shown.candidates > 1).then_some("trimmed"),
     })
 }
 
@@ -169,6 +218,7 @@ fn for_each_candidate<'s>(srcset: &'s str, mut found: impl FnMut(Candidate<'s>))
         found(Candidate {
             index,
             url,
+            descriptor,
             kind,
             value,
         });

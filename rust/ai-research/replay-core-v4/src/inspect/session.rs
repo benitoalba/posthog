@@ -1,11 +1,10 @@
 //! Everything the recorder learns about one session, block by block.
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
+use super::assets::{AssetSlot, MAX_BLOCK_ASSET_SLOTS};
 use super::clicks::{ClickKind, ClickTracker};
-use super::css::CssRewrite;
-use super::dom::{DomInspector, RemoteUrls, Srcset, UrlLimit};
+use super::dom::DomInspector;
 use super::events::{href_from, number, Activity, DataFields, EventCounter};
 use super::features::{BlockFeatures, FeatureRecorder, SurfacingFeatures};
 use super::rrweb::{
@@ -52,9 +51,9 @@ pub struct BlockInspection {
     features: FeatureRecorder,
     moments: Vec<Moment>,
     image_urls: Vec<String>,
-    remote_urls: RemoteUrls,
+    assets: Vec<Vec<AssetSlot>>,
+    asset_slots: usize,
     events: u32,
-    resolve_budget: Option<Arc<AtomicUsize>>,
 }
 
 /// What the inspector learned about one block.
@@ -65,25 +64,15 @@ pub struct Inspected {
     pub moments: Vec<Moment>,
     /// Remote image URLs the block's DOM referenced, for the image fetcher.
     pub image_urls: Vec<String>,
-    /// Every remote URL in an image slot of the block, which the writer replaces with its reference.
-    pub remote_urls: Vec<String>,
-    /// Set when `remote_urls` stops short, so that the block must not be stored.
-    pub url_limit: Option<UrlLimit>,
-    /// The image-slot srcset values of the block, which the writer rebuilds from the candidates it keeps.
-    pub srcsets: Vec<Srcset>,
-    pub css_rewrites: Vec<CssRewrite>,
+    /// The asset slots of each message, which the writer replaces in place.
+    pub assets: Vec<Vec<AssetSlot>>,
+    /// The block holds more than [`MAX_BLOCK_ASSET_SLOTS`] slots, so `assets` stops short and the block must not be
+    /// stored.
+    pub too_many_asset_slots: bool,
 }
 
 impl BlockInspection {
-    /// A block whose relative CSS URLs draw their resolved bytes from `budget`, which other blocks can share.
-    pub fn with_resolve_budget(budget: Arc<AtomicUsize>) -> Self {
-        Self {
-            resolve_budget: Some(budget),
-            ..Self::default()
-        }
-    }
-
-    pub fn finish(mut self) -> Inspected {
+    pub fn finish(self) -> Inspected {
         let features = self.features.finish();
         let mut stats = self.counter.finish();
         stats.surfacing = SurfacingFeatures::from(&features);
@@ -92,10 +81,8 @@ impl BlockInspection {
             features,
             moments: self.moments,
             image_urls: self.image_urls,
-            url_limit: self.remote_urls.limit,
-            srcsets: self.remote_urls.take_srcsets(),
-            css_rewrites: self.remote_urls.take_css_rewrites(),
-            remote_urls: self.remote_urls.into_urls(),
+            assets: self.assets,
+            too_many_asset_slots: self.asset_slots > MAX_BLOCK_ASSET_SLOTS,
         }
     }
 }
@@ -129,8 +116,9 @@ impl SessionInspector {
                 ids.push(id.to_owned());
             }
         }
-        for event in &message.events {
-            self.observe(block, &message.inner, event, &window);
+        block.assets.push(Vec::new());
+        for (index, event) in message.events.iter().enumerate() {
+            self.observe(block, &message.inner, event, index as u32, &window);
         }
         self.dom.finish_message();
     }
@@ -140,6 +128,7 @@ impl SessionInspector {
         block: &mut BlockInspection,
         inner: &[u8],
         event: &Event,
+        index_in_message: u32,
         window: &Arc<str>,
     ) {
         if !self.decided {
@@ -183,11 +172,24 @@ impl SessionInspector {
             event,
             window,
             page_url.as_deref(),
-            block.resolve_budget.as_deref(),
             &mut block.counter.stats,
         );
         block.image_urls.extend(self.dom.take_image_urls());
-        block.remote_urls.extend(self.dom.take_remote_urls());
+        for (buffer, span, context) in self.dom.take_asset_slots() {
+            block.asset_slots += 1;
+            if block.asset_slots <= MAX_BLOCK_ASSET_SLOTS {
+                let slots = block
+                    .assets
+                    .last_mut()
+                    .expect("each message pushes its list first");
+                slots.push(AssetSlot {
+                    event: index_in_message,
+                    buffer,
+                    span,
+                    context,
+                });
+            }
+        }
         if observed.full_snapshot {
             self.cold = false;
         }
@@ -250,6 +252,9 @@ impl SessionInspector {
 mod tests {
     use serde_json::{json, Value};
 
+    use url::Url;
+
+    use super::super::assets::AssetContext;
     use super::*;
     use crate::inspect::stats::fold_session;
     use crate::scan::message::{read_message, Message};
@@ -343,13 +348,35 @@ mod tests {
                 "https://b.example.com/img/a.png"
             ]
         );
-        assert!(inspected.css_rewrites.is_empty());
+        // Each occurrence of the rule keeps its own window's page base, so the writer resolves each as that window does.
+        assert_eq!(
+            page_bases(&inspected),
+            [
+                Some("https://a.example.com/"),
+                Some("https://b.example.com/")
+            ]
+        );
 
         let mut block = BlockInspection::default();
         let rule = json!([{"type": 3, "timestamp": 3, "data": {"source": 8, "id": 3, "replaceSync": ".b{background:url(/img/b.png)}"}}]);
         session.observe_message(&mut block, &message_in(Some("unseen"), rule.clone()));
         session.observe_message(&mut block, &message_in(Some("a"), rule));
-        assert!(block.finish().css_rewrites.is_empty());
+        assert_eq!(
+            page_bases(&block.finish()),
+            [None, Some("https://a.example.com/")]
+        );
+    }
+
+    fn page_bases(inspected: &Inspected) -> Vec<Option<&str>> {
+        inspected
+            .assets
+            .iter()
+            .flatten()
+            .map(|slot| match &slot.context {
+                AssetContext::Css { page_base, .. } => page_base.as_deref().map(Url::as_str),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]

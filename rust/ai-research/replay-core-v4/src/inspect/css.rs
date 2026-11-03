@@ -1,36 +1,39 @@
 //! Image URLs in CSS: the `url()`s of an image property, or of a custom property that reaches one through `var()`.
-
-use std::sync::atomic::{AtomicUsize, Ordering};
+//! [`rewrite_css`] is the one reader of them. The inspector runs it to choose the fetch jobs, and the writer runs it to
+//! replace each URL with what the block stores.
 
 use url::Url;
 
+use super::assets::Replacement;
+use crate::scan::images::is_data_url;
 use crate::url_policy::{
     is_fetched_image_type, is_protocol_relative, is_remote, try_canonicalize, MAX_URL_LEN,
 };
 
-/// Each resolution copies the page's origin, so one event resolves at most this many relative URLs.
-pub const MAX_RESOLVED_URLS: usize = 1024;
-/// Far more than a real `image-set()` lists. A longer set gets no rewrite, so the inspector never holds its candidates.
+/// Far more than a real `image-set()` lists. A longer set keeps all its candidates.
 const MAX_IMAGE_SET_CANDIDATES: usize = 32;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CssUrl<'a> {
-    Image(&'a str),
-    Unshown(&'a str),
-    /// A resolved root-relative URL. The block holds only the relative text, which its rewrite replaces.
-    Resolved(&'a str),
-    /// A root-relative `url()` that did not resolve. Its text keeps no rewrite, which another window would apply here.
-    Unresolved(&'a str),
-    Rewrite(CssRewrite),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CssKind {
+    /// Declarations or rules: a `style` attribute, `<style>` text, `_cssText` or a CSSOM rule.
+    Text,
+    /// The value of one property that can hold an image, as a style diff or a CSSOM declaration sets it.
+    Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CssRewrite {
-    pub text: String,
-    pub replacement: String,
-    pub dropped: Vec<String>,
-    /// The URL that `replacement` holds in place of a relative one, for the writer to replace with its reference.
-    pub resolved: Option<String>,
+/// An image URL in CSS, after its CSS escapes, and absolute when the page wrote it root-relative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CssImage<'a> {
+    pub url: &'a str,
+    /// A renderer can load it. A candidate of an `image-set()` that the recorder does not cut to one is not shown.
+    pub shown: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CssRewriteCounts {
+    pub image_sets: u64,
+    pub relative_urls: u64,
+    pub unresolved: u64,
 }
 
 /// The origin that a root-relative URL on `page_url` resolves against, as `https` because the fetcher loads nothing else.
@@ -48,144 +51,250 @@ pub fn page_base(page_url: &str) -> Option<Url> {
     Some(base)
 }
 
-#[derive(Default)]
-pub struct Resolver<'p> {
-    base: Option<&'p Url>,
-    remaining: usize,
-    budget: Option<&'p AtomicUsize>,
+/// Only a root-relative URL, as `/a.png`, resolves. It needs the page's origin and nothing else, so no part of a page
+/// path, which can hold a token, reaches a fetch, and a `<base>` or a style sheet's own URL cannot change it.
+fn resolve(base: Option<&Url>, source: &str) -> Option<String> {
+    is_root_relative(source)
+        .then(|| base?.join(source).ok())
+        .flatten()
+        .map(String::from)
 }
 
-impl<'p> Resolver<'p> {
-    pub fn new(base: Option<&'p Url>, budget: Option<&'p AtomicUsize>) -> Self {
-        Self {
-            base,
-            remaining: MAX_RESOLVED_URLS,
-            budget,
-        }
-    }
-
-    /// Only a root-relative URL, as `/a.png`, resolves. It needs the page's origin and nothing else, so no part of a page
-    /// path, which can hold a token, reaches a fetch, and a `<base>` or a style sheet's own URL cannot change it.
-    fn resolves(&self, source: &str) -> bool {
-        self.base.is_some() && self.remaining > 0 && is_root_relative(source)
-    }
-
-    fn resolve(&mut self, source: &str) -> Option<String> {
-        if !self.resolves(source) {
-            return None;
-        }
-        let absolute = String::from(self.base?.join(source).ok()?);
-        let within_budget = self.budget.is_none_or(|budget| {
-            budget
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                    left.checked_sub(absolute.len())
-                })
-                .is_ok()
-        });
-        if !within_budget {
-            self.remaining = 0;
-            return None;
-        }
-        self.remaining -= 1;
-        Some(absolute)
-    }
-}
-
-/// `css` with each `url()` and `image-set()` that `replacement` names replaced, found as the inspector finds them, so
-/// that a quoted string, a comment or an escaped selector never matches. `None` when nothing changed.
-pub fn rewrite_functions(
-    css: &str,
-    replacement: &mut impl FnMut(&str) -> Option<String>,
-) -> Option<String> {
-    let bytes = css.as_bytes();
-    let mut out: Option<String> = None;
-    let mut copied_to = 0;
-    let mut position = 0;
-    while position < bytes.len() {
-        if starts_with(bytes, position, b"/*") {
-            position = skip_comment(bytes, position).unwrap_or(bytes.len());
-            continue;
-        }
-        if bytes[position] == b'\\' {
-            position = skip_escape(bytes, position);
-            continue;
-        }
-        if matches!(bytes[position], b'\'' | b'"') {
-            position = skip_quoted(bytes, position).unwrap_or(bytes.len());
-            continue;
-        }
-        let image_set = if function_at(bytes, position, b"image-set") {
-            Some(b"image-set".len())
-        } else if function_at(bytes, position, b"-webkit-image-set") {
-            Some(b"-webkit-image-set".len())
-        } else {
-            None
-        };
-        let end = if let Some(name_len) = image_set {
-            // The inspector stops at an unterminated set, and each later opener would scan to the end again.
-            let Some(end) = matching_paren(bytes, position + name_len) else {
-                break;
-            };
-            end
-        } else if function_at(bytes, position, b"url") {
-            scan_url_function(css, position).0
-        } else {
-            position += 1;
-            continue;
-        };
-        if let Some(replaced) = replacement(&css[position..end]) {
-            let out = out.get_or_insert_with(|| String::with_capacity(css.len()));
-            out.push_str(&css[copied_to..position]);
-            out.push_str(&replaced);
-            copied_to = end;
-        }
-        position = end;
-    }
-    let mut out = out?;
-    out.push_str(&css[copied_to..]);
-    Some(out)
-}
-
-/// Calls `found` with each image URL and rewrite in `css`: a `style` attribute, `<style>` text or `_cssText`.
-pub fn image_urls(css: &str, resolver: &mut Resolver<'_>, found: &mut impl FnMut(CssUrl<'_>)) {
-    for (start, end) in image_value_ranges(css) {
-        value_urls(&css[start..end], resolver, found);
-    }
-}
-
-pub fn declaration_image_urls(
-    property: &str,
-    value: &str,
-    resolver: &mut Resolver<'_>,
-    found: &mut impl FnMut(CssUrl<'_>),
-) {
-    if can_hold_image(property.trim()) {
-        value_urls(value, resolver, found);
-    }
-}
-
-/// `text` as CSSOM writes it inside an identifier, as a selector holds the URL of a class like `bg-[url(https://…)]`.
-pub fn escape_in_identifier(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len() * 2);
-    for character in text.chars() {
-        match character {
-            '\0' => escaped.push('\u{fffd}'),
-            '\u{1}'..='\u{1f}' | '\u{7f}' => {
-                escaped.push_str(&format!("\\{:x} ", u32::from(character)));
-            }
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => escaped.push(character),
-            _ if !character.is_ascii() => escaped.push(character),
-            _ => {
-                escaped.push('\\');
-                escaped.push(character);
-            }
-        }
-    }
-    escaped
-}
-
-fn can_hold_image(property: &str) -> bool {
+pub fn can_hold_image(property: &str) -> bool {
+    let property = property.trim();
     property.starts_with("--") || is_image_property(property)
+}
+
+/// Whether `css` holds a `url(` or an `image-set(`, so that most CSS strings need no slot.
+pub fn may_hold_image(css: &str) -> bool {
+    let bytes = css.as_bytes();
+    let ends_with = |end: usize, name: &[u8]| {
+        end >= name.len() && bytes[end - name.len()..end].eq_ignore_ascii_case(name)
+    };
+    memchr::memchr_iter(b'(', bytes)
+        .any(|open| ends_with(open, b"url") || ends_with(open, b"image-set"))
+}
+
+/// `css` with each image URL replaced by what `asset` returns for it, and each `image-set()` cut to the one candidate
+/// a renderer can load. `None` when nothing changed. Only whole `url()` and `image-set()` functions in the value of an
+/// image property change, so a class name such as `bg-[url(/a.png)]`, a quoted string or a comment keeps its text.
+pub fn rewrite_css(
+    css: &str,
+    kind: CssKind,
+    base: Option<&Url>,
+    asset: &mut impl FnMut(CssImage<'_>) -> Option<Replacement>,
+    counts: &mut CssRewriteCounts,
+) -> Option<String> {
+    let mut out = Splice::new(css);
+    let mut rewrite = Rewrite {
+        base,
+        asset,
+        counts,
+    };
+    match kind {
+        CssKind::Text => {
+            for (start, end) in image_value_ranges(css) {
+                rewrite.value(css, start, end, &mut out);
+            }
+        }
+        CssKind::Value => rewrite.value(css, 0, css.len(), &mut out),
+    }
+    out.finish()
+}
+
+struct Splice<'s> {
+    text: &'s str,
+    copied_to: usize,
+    out: Option<String>,
+}
+
+impl<'s> Splice<'s> {
+    fn new(text: &'s str) -> Self {
+        Self {
+            text,
+            copied_to: 0,
+            out: None,
+        }
+    }
+
+    fn replace(&mut self, start: usize, end: usize, with: &str) {
+        let out = self
+            .out
+            .get_or_insert_with(|| String::with_capacity(self.text.len()));
+        out.push_str(&self.text[self.copied_to..start]);
+        out.push_str(with);
+        self.copied_to = end;
+    }
+
+    fn finish(self) -> Option<String> {
+        let mut out = self.out?;
+        out.push_str(&self.text[self.copied_to..]);
+        Some(out)
+    }
+}
+
+struct Rewrite<'a, F> {
+    base: Option<&'a Url>,
+    asset: &'a mut F,
+    counts: &'a mut CssRewriteCounts,
+}
+
+impl<F: FnMut(CssImage<'_>) -> Option<Replacement>> Rewrite<'_, F> {
+    /// Rewrites the functions in `css[start..end]`, the value of one image property.
+    fn value(&mut self, css: &str, start: usize, end: usize, out: &mut Splice<'_>) {
+        let value = &css[..end];
+        let bytes = value.as_bytes();
+        let mut position = start;
+        while position < end {
+            if starts_with(bytes, position, b"/*") {
+                position = skip_comment(bytes, position).unwrap_or(end);
+                continue;
+            }
+            if bytes[position] == b'\\' {
+                position = skip_escape(bytes, position);
+                continue;
+            }
+            if matches!(bytes[position], b'\'' | b'"') {
+                position = skip_quoted(bytes, position).unwrap_or(end);
+                continue;
+            }
+            let image_set = if function_at(bytes, position, b"image-set") {
+                Some(b"image-set".len())
+            } else if function_at(bytes, position, b"-webkit-image-set") {
+                Some(b"-webkit-image-set".len())
+            } else {
+                None
+            };
+            if let Some(name_len) = image_set {
+                let Some(set_end) = matching_paren(bytes, position + name_len) else {
+                    return;
+                };
+                if let Some(text) = self.image_set(&value[position..set_end], name_len) {
+                    out.replace(position, set_end, &text);
+                }
+                position = set_end;
+                continue;
+            }
+            if function_at(bytes, position, b"url") {
+                let (resume_at, source) = scan_url_function(value, position);
+                if let Some(text) = source.and_then(|source| self.url(&source, true)) {
+                    out.replace(position, resume_at, &text);
+                }
+                position = resume_at;
+                continue;
+            }
+            position += 1;
+        }
+    }
+
+    /// The `url()` that replaces one with this source. `None` keeps the function as the page wrote it.
+    fn url(&mut self, source: &str, shown: bool) -> Option<String> {
+        // A fragment names an element of the page, such as an SVG mask, and loads nothing.
+        if source.starts_with('#') {
+            return None;
+        }
+        if is_root_relative(source) {
+            let Some(absolute) = resolve(self.base, source) else {
+                self.counts.unresolved += 1;
+                return None;
+            };
+            self.counts.relative_urls += 1;
+            let replaced = (self.asset)(CssImage {
+                url: &absolute,
+                shown,
+            });
+            return Some(url_function(&replaced.map_or(absolute, |r| r.text)));
+        }
+        if is_remote(source) || is_data_url(source) {
+            return (self.asset)(CssImage { url: source, shown }).map(|r| url_function(&r.text));
+        }
+        None
+    }
+
+    /// A renderer picks the candidate for its pixel ratio and fails offline on any the fetcher did not take, so the set
+    /// keeps one: the highest resolution of a stored type. Fetching one candidate per set limits the load on the image's
+    /// host. A set with no such candidate, or one the recorder does not read in full, keeps every candidate, each URL
+    /// replaced where it is.
+    fn image_set(&mut self, function: &str, name_len: usize) -> Option<String> {
+        let contents_start = name_len + 1;
+        let contents = &function[contents_start..function.len() - 1];
+        let mut candidates = Vec::new();
+        let mut readable = true;
+        split_image_set(contents, &mut |_, text| match image_set_candidate(text)
+            .filter(|_| candidates.len() < MAX_IMAGE_SET_CANDIDATES)
+        {
+            Some(candidate) => candidates.push(candidate),
+            None => readable = false,
+        })?;
+        let base = self.base;
+        let loads = |source: &str| {
+            is_data_url(source)
+                || (is_remote(source) && try_canonicalize(source).is_ok())
+                || (base.is_some() && is_root_relative(source))
+        };
+        let kept = candidates
+            .iter()
+            .enumerate()
+            .filter(|_| readable)
+            .filter_map(|(index, candidate)| {
+                candidate.source.as_deref().filter(|source| loads(source))?;
+                Some((index, candidate.resolution_dppx?))
+            })
+            .fold(None, |best: Option<(usize, f64)>, candidate| {
+                if best.is_none_or(|best| candidate.1 > best.1) {
+                    Some(candidate)
+                } else {
+                    best
+                }
+            });
+        let Some((index, _)) = kept else {
+            return self.each_image_set_candidate(function, contents_start);
+        };
+        let kept = &candidates[index];
+        let source = kept.source.as_deref().unwrap_or_default();
+        let url = self.url(source, true);
+        if candidates.len() == 1 && url.is_none() {
+            return None;
+        }
+        if candidates.len() > 1 {
+            self.counts.image_sets += 1;
+        }
+        let candidate = match url {
+            Some(url) => format!("{url} {}", kept.descriptors.trim())
+                .trim_end()
+                .to_owned(),
+            None => kept.text.to_owned(),
+        };
+        Some(format!("{}({candidate})", &function[..name_len]))
+    }
+
+    fn each_image_set_candidate(
+        &mut self,
+        function: &str,
+        contents_start: usize,
+    ) -> Option<String> {
+        let contents = &function[contents_start..function.len() - 1];
+        let mut out = Splice::new(function);
+        split_image_set(contents, &mut |at, text| {
+            let start = contents_start + at + (text.len() - text.trim_start().len());
+            let candidate = text.trim();
+            let bytes = candidate.as_bytes();
+            let (end, source) = if function_at(bytes, 0, b"url") {
+                scan_url_function(candidate, 0)
+            } else if matches!(bytes.first(), Some(b'\'' | b'"')) {
+                match skip_quoted(bytes, 0) {
+                    Some(end) => (end, css_unescape(&candidate[1..end - 1], true)),
+                    None => return,
+                }
+            } else {
+                return;
+            };
+            if let Some(text) = source.and_then(|source| self.url(source.trim(), false)) {
+                out.replace(start, start + end, &text);
+            }
+        })?;
+        out.finish()
+    }
 }
 
 fn image_value_ranges(css: &str) -> Vec<(usize, usize)> {
@@ -310,180 +419,13 @@ fn is_image_property(property: &str) -> bool {
         )
 }
 
-fn value_urls(value: &str, resolver: &mut Resolver<'_>, found: &mut impl FnMut(CssUrl<'_>)) {
-    let bytes = value.as_bytes();
-    let mut position = 0;
-    while position < bytes.len() {
-        if starts_with(bytes, position, b"/*") {
-            position = skip_comment(bytes, position).unwrap_or(bytes.len());
-            continue;
-        }
-        if bytes[position] == b'\\' {
-            position = skip_escape(bytes, position);
-            continue;
-        }
-        if matches!(bytes[position], b'\'' | b'"') {
-            position = skip_quoted(bytes, position).unwrap_or(bytes.len());
-            continue;
-        }
-        let image_set = if function_at(bytes, position, b"image-set") {
-            Some(b"image-set".len())
-        } else if function_at(bytes, position, b"-webkit-image-set") {
-            Some(b"-webkit-image-set".len())
-        } else {
-            None
-        };
-        if let Some(name_len) = image_set {
-            let Some(end) = matching_paren(bytes, position + name_len) else {
-                return;
-            };
-            image_set_urls(&value[position..end], name_len, resolver, found);
-            position = end;
-            continue;
-        }
-        if function_at(bytes, position, b"url") {
-            let (resume_at, source) = scan_url_function(value, position);
-            if let Some(source) = source.as_deref().and_then(collectable) {
-                url_function_urls(&value[position..resume_at], source, resolver, found);
-            }
-            position = resume_at;
-            continue;
-        }
-        position += 1;
-    }
-}
-
-/// v3 collects neither a fragment nor a source with an escape in it.
-fn collectable(source: &str) -> Option<&str> {
-    let source = source.trim();
-    (!source.starts_with('#') && !source.contains('\\')).then_some(source)
-}
-
-fn url_function_urls(
-    function: &str,
-    source: &str,
-    resolver: &mut Resolver<'_>,
-    found: &mut impl FnMut(CssUrl<'_>),
-) {
-    match resolver.resolve(source) {
-        Some(absolute) => {
-            found(CssUrl::Resolved(&absolute));
-            found(CssUrl::Rewrite(CssRewrite {
-                text: function.to_owned(),
-                replacement: url_function(&absolute),
-                dropped: Vec::new(),
-                resolved: Some(absolute),
-            }));
-        }
-        None if is_root_relative(source) => found(CssUrl::Unresolved(function)),
-        None => found(CssUrl::Image(source)),
-    }
-}
-
 fn is_root_relative(source: &str) -> bool {
     source.starts_with('/') && !is_protocol_relative(source)
 }
 
-/// A serialized URL percent-encodes `"`, so the quotes hold any URL that [`Resolver`] returns.
+/// References, markers and URLs that the URL crate serialized hold no `"`, so the quotes hold any URL written here.
 fn url_function(url: &str) -> String {
     format!("url(\"{url}\")")
-}
-
-/// A renderer picks the candidate for its pixel ratio and fails offline on any the fetcher did not take, so the set keeps
-/// one: the highest resolution of a stored type. Fetching one candidate per set limits the load on the image's host.
-fn image_set_urls(
-    function: &str,
-    name_len: usize,
-    resolver: &mut Resolver<'_>,
-    found: &mut impl FnMut(CssUrl<'_>),
-) {
-    let contents = &function[name_len + 1..function.len() - 1];
-    let mut candidates = Vec::new();
-    let mut count = 0;
-    let mut readable = true;
-    let split = split_image_set(contents, &mut |text| {
-        count += 1;
-        if count <= MAX_IMAGE_SET_CANDIDATES {
-            match image_set_candidate(text) {
-                Some(candidate) => candidates.push(candidate),
-                None => readable = false,
-            }
-        }
-    });
-    if split.is_none() || !readable {
-        return;
-    }
-    if count > MAX_IMAGE_SET_CANDIDATES {
-        split_image_set(contents, &mut |text| {
-            if let Some(source) = image_set_candidate(text).and_then(|candidate| candidate.source) {
-                if is_remote(&source) {
-                    found(CssUrl::Unshown(&source));
-                }
-            }
-        });
-        return;
-    }
-    let loads = |source: &str| {
-        is_data_url(source)
-            || (is_remote(source) && try_canonicalize(source).is_ok())
-            || resolver.resolves(source)
-    };
-    let kept = candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, candidate)| {
-            let source = candidate.source.as_deref().filter(|source| loads(source))?;
-            Some((index, source, candidate.resolution_dppx?))
-        })
-        .fold(None, |best: Option<(usize, &str, f64)>, candidate| {
-            if best.is_none_or(|best| candidate.2 > best.2) {
-                Some(candidate)
-            } else {
-                best
-            }
-        });
-    let mut dropped = Vec::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        let source = candidate.source.as_deref().unwrap_or_default();
-        if kept.is_none_or(|kept| kept.0 != index) && is_remote(source) {
-            found(CssUrl::Unshown(source));
-            dropped.push(source.to_owned());
-        }
-    }
-    let Some((index, source, _)) = kept else {
-        return;
-    };
-    let kept = &candidates[index];
-    let resolved = resolver.resolve(source);
-    match &resolved {
-        Some(absolute) => found(CssUrl::Resolved(absolute)),
-        None => found(CssUrl::Image(source)),
-    }
-    // A candidate kept as the page wrote it holds its URL as the writer's URL pass looks for it.
-    let candidate = match &resolved {
-        Some(absolute) => format!("{} {}", url_function(absolute), kept.descriptors.trim())
-            .trim_end()
-            .to_owned(),
-        None => kept.text.to_owned(),
-    };
-    // The writer moves an inline image out of the block before it rewrites CSS, so a set that holds one never matches.
-    let holds_data_url = candidates
-        .iter()
-        .any(|candidate| candidate.source.as_deref().is_some_and(is_data_url));
-    if !holds_data_url && (candidates.len() > 1 || resolved.is_some()) {
-        found(CssUrl::Rewrite(CssRewrite {
-            text: function.to_owned(),
-            replacement: format!("{}({candidate})", &function[..name_len]),
-            dropped,
-            resolved,
-        }));
-    }
-}
-
-fn is_data_url(source: &str) -> bool {
-    source
-        .get(..5)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
 }
 
 struct ImageSetCandidate<'a> {
@@ -493,14 +435,14 @@ struct ImageSetCandidate<'a> {
     resolution_dppx: Option<f64>,
 }
 
-fn split_image_set<'a>(contents: &'a str, each: &mut impl FnMut(&'a str)) -> Option<()> {
+fn split_image_set<'a>(contents: &'a str, each: &mut impl FnMut(usize, &'a str)) -> Option<()> {
     let bytes = contents.as_bytes();
     let mut start = 0;
     let mut position = 0;
     let mut depth = 0usize;
     while position <= bytes.len() {
         if position == bytes.len() || (bytes[position] == b',' && depth == 0) {
-            each(&contents[start..position]);
+            each(start, &contents[start..position]);
             start = position + 1;
             position += 1;
             continue;
@@ -538,13 +480,16 @@ fn image_set_candidate(candidate: &str) -> Option<ImageSetCandidate<'_>> {
         (source, &candidate[resume_at..])
     } else if matches!(bytes[0], b'\'' | b'"') {
         let end = skip_quoted(bytes, 0)?;
-        (Some(candidate[1..end - 1].to_owned()), &candidate[end..])
+        (
+            css_unescape(&candidate[1..end - 1], true).map(|s| s.trim().to_owned()),
+            &candidate[end..],
+        )
     } else {
         (None, "")
     };
     Some(ImageSetCandidate {
         text: candidate,
-        source: source.as_deref().and_then(collectable).map(str::to_owned),
+        source: source.filter(|source| !source.is_empty() && !source.starts_with('#')),
         descriptors,
         resolution_dppx: parse_descriptors(descriptors),
     })
@@ -598,10 +543,24 @@ fn parse_resolution(token: &str) -> Option<f64> {
     }
 }
 
+/// Where the `url()` at `start` ends, and its URL after its CSS escapes. A browser reads a `url(` that the text ends
+/// before its `)`, so that one runs to the end. `None` for a function that holds no URL a browser loads.
 fn scan_url_function(value: &str, start: usize) -> (usize, Option<String>) {
     let bytes = value.as_bytes();
     let Some(resume_at) = matching_paren(bytes, start + 3) else {
-        return (bytes.len(), None);
+        let rest = value[start + 4..].trim();
+        let source = match rest.as_bytes().first() {
+            Some(&quote @ (b'\'' | b'"')) => {
+                css_unescape(rest[1..].trim_end_matches(char::from(quote)), true)
+            }
+            _ => css_unescape(rest, false),
+        };
+        return (
+            value.len(),
+            source
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
+        );
     };
     let contents_end = resume_at - 1;
     let mut position = start + 4;
@@ -616,15 +575,77 @@ fn scan_url_function(value: &str, start: usize) -> (usize, Option<String>) {
         if position != contents_end {
             return (resume_at, None);
         }
-        &value[content_start..end - 1]
+        css_unescape(&value[content_start..end - 1], true)
     } else {
-        &value[position..contents_end]
+        css_unescape(value[position..contents_end].trim(), false)
     };
-    let source = source.trim();
     (
         resume_at,
-        (!source.is_empty() && !source.contains('\\')).then(|| source.to_owned()),
+        source
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
     )
+}
+
+/// The text of a CSS string or URL token after its escapes, as CSS Syntax reads them. `None` for a URL token with an
+/// escaped line break, which a browser does not load.
+fn css_unescape(raw: &str, quoted: bool) -> Option<String> {
+    if !raw.contains('\\') {
+        return Some(raw.to_owned());
+    }
+    let mut text = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            text.push(character);
+            continue;
+        }
+        match chars.peek().copied() {
+            None if quoted => {}
+            None => text.push('\u{fffd}'),
+            Some('\n' | '\r' | '\u{c}') if !quoted => return None,
+            Some(line_break @ ('\n' | '\r' | '\u{c}')) => {
+                chars.next();
+                if line_break == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            Some(digit) if digit.is_ascii_hexdigit() => {
+                let mut value = 0u32;
+                for _ in 0..6 {
+                    match chars.peek().and_then(|c| c.to_digit(16)) {
+                        Some(digit) => {
+                            value = value * 16 + digit;
+                            chars.next();
+                        }
+                        None => break,
+                    }
+                }
+                match chars.peek() {
+                    Some(' ' | '\t' | '\n' | '\u{c}') => {
+                        chars.next();
+                    }
+                    Some('\r') => {
+                        chars.next();
+                        if chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                    }
+                    _ => {}
+                }
+                text.push(
+                    char::from_u32(value)
+                        .filter(|&c| c != '\0')
+                        .unwrap_or('\u{fffd}'),
+                );
+            }
+            Some(escaped) => {
+                chars.next();
+                text.push(escaped);
+            }
+        }
+    }
+    Some(text)
 }
 
 fn function_at(bytes: &[u8], start: usize, name: &[u8]) -> bool {
@@ -717,34 +738,41 @@ fn starts_with(bytes: &[u8], start: usize, needle: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    fn found(css: &str, page_url: Option<&str>) -> Vec<String> {
+    /// The CSS as `rewrite_css` leaves it, with each URL replaced by `<url>`, and `!` before a URL a renderer does not
+    /// show. Also the URLs in the order `asset` saw them.
+    fn rewritten(css: &str, page_url: Option<&str>) -> (String, Vec<String>) {
         let base = page_url.and_then(page_base);
-        let mut found = Vec::new();
-        image_urls(css, &mut Resolver::new(base.as_ref(), None), &mut |url| {
-            found.push(match url {
-                CssUrl::Image(url) => format!("image {url}"),
-                CssUrl::Unshown(url) => format!("unshown {url}"),
-                CssUrl::Resolved(url) => format!("resolved {url}"),
-                CssUrl::Unresolved(text) => format!("unresolved {text}"),
-                CssUrl::Rewrite(rewrite) => format!(
-                    "rewrite {} => {} dropping {:?}",
-                    rewrite.text, rewrite.replacement, rewrite.dropped
-                ),
-            })
-        });
-        found
+        let mut seen = Vec::new();
+        let out = rewrite_css(
+            css,
+            CssKind::Text,
+            base.as_ref(),
+            &mut |image| {
+                let label = format!("{}{}", if image.shown { "" } else { "!" }, image.url);
+                seen.push(label.clone());
+                Some(Replacement {
+                    text: format!("<{label}>"),
+                    declined: false,
+                })
+            },
+            &mut CssRewriteCounts::default(),
+        );
+        (out.unwrap_or_else(|| css.to_owned()), seen)
     }
 
     #[test]
     fn reads_past_escapes_outside_strings() {
         // Tailwind escapes brackets, parentheses and quotes in its arbitrary value class names.
-        let css = r".bg-\[url\(\'\/hero\.png\'\)\]{background-image:url('/hero.png')}.a{background:url(https://cdn.example.com/a.png)}";
+        let selector = r".bg-\[url\(\'\/hero\.png\'\)\]{background-image:url('/hero.png')}";
         assert_eq!(
-            found(css, None),
-            [
-                "unresolved url('/hero.png')",
-                "image https://cdn.example.com/a.png"
-            ]
+            rewritten(
+                &format!("{selector}.a{{background:url(https://cdn.example.com/a.png)}}"),
+                None
+            ),
+            (
+                format!(r#"{selector}.a{{background:url("<https://cdn.example.com/a.png>")}}"#),
+                vec!["https://cdn.example.com/a.png".to_owned()]
+            )
         );
     }
 
@@ -754,82 +782,86 @@ mod tests {
             "{} a:hover {{ background: url(https://cdn.example.com/a.png) }}",
             "a:hover, b:focus-visible,\n".repeat(50_000)
         );
-        assert_eq!(found(&css, None), ["image https://cdn.example.com/a.png"]);
+        assert_eq!(rewritten(&css, None).1, ["https://cdn.example.com/a.png"]);
     }
 
     #[test]
-    fn rewrites_what_an_offline_render_cannot_load() {
+    fn rewrites_each_image_url_where_the_page_wrote_it() {
         let page = Some("http://app.example.com/shop/item?id=1");
         for (css, expected) in [
             (
                 ":root{--hero:url(https://cdn.example.com/hero.png)}",
-                vec!["image https://cdn.example.com/hero.png"],
+                r#":root{--hero:url("<https://cdn.example.com/hero.png>")}"#,
             ),
             (
                 ".a{background:url(/img/a.png)}",
-                vec![
-                    "resolved https://app.example.com/img/a.png",
-                    r#"rewrite url(/img/a.png) => url("https://app.example.com/img/a.png") dropping []"#,
-                ],
+                r#".a{background:url("<https://app.example.com/img/a.png>")}"#,
             ),
             (
                 ".a{background:url(../img/a.png)}",
-                vec!["image ../img/a.png"],
+                ".a{background:url(../img/a.png)}",
+            ),
+            (".a{mask:url(#shape)}", ".a{mask:url(#shape)}"),
+            (
+                ".a{color:url(https://cdn.example.com/a.png)}",
+                ".a{color:url(https://cdn.example.com/a.png)}",
+            ),
+            (
+                r".a{background:url(https\3a //cdn.example.com/a.png#access_token=x)}",
+                r#".a{background:url("<https://cdn.example.com/a.png#access_token=x>")}"#,
+            ),
+            (
+                ".a{background:url(https://cdn.example.com/a.png",
+                r#".a{background:url("<https://cdn.example.com/a.png>")"#,
             ),
             (
                 r#".a{background-image:image-set("https://cdn.example.com/1x.png" 1x, url(https://cdn.example.com/2x.png) 2x)}"#,
-                vec![
-                    "unshown https://cdn.example.com/1x.png",
-                    "image https://cdn.example.com/2x.png",
-                    r#"rewrite image-set("https://cdn.example.com/1x.png" 1x, url(https://cdn.example.com/2x.png) 2x) => image-set(url(https://cdn.example.com/2x.png) 2x) dropping ["https://cdn.example.com/1x.png"]"#,
-                ],
+                r#".a{background-image:image-set(url("<https://cdn.example.com/2x.png>") 2x)}"#,
             ),
             (
                 r#".a{background:-webkit-image-set(url(/a.avif) type("image/avif") 2x, url(/a.jpg) type("image/jpeg") 1x, linear-gradient(red, blue) 3x)}"#,
-                vec![
-                    "resolved https://app.example.com/a.jpg",
-                    r#"rewrite -webkit-image-set(url(/a.avif) type("image/avif") 2x, url(/a.jpg) type("image/jpeg") 1x, linear-gradient(red, blue) 3x) => -webkit-image-set(url("https://app.example.com/a.jpg") type("image/jpeg") 1x) dropping []"#,
-                ],
+                r#".a{background:-webkit-image-set(url("<https://app.example.com/a.jpg>") type("image/jpeg") 1x)}"#,
             ),
             (
                 ".a{background:image-set(url(https://cdn.example.com/a.png))}",
-                vec!["image https://cdn.example.com/a.png"],
+                r#".a{background:image-set(url("<https://cdn.example.com/a.png>"))}"#,
+            ),
+            // A set with no candidate that can load keeps each one, as the declined marker it gets.
+            (
+                r#".a{background:image-set(url(https://10.0.0.7/a.png) 1x, "https://10.0.0.7/b.png" 2x)}"#,
+                r#".a{background:image-set(url("<!https://10.0.0.7/a.png>") 1x, url("<!https://10.0.0.7/b.png>") 2x)}"#,
             ),
         ] {
-            assert_eq!(found(css, page), expected, "{css}");
+            assert_eq!(rewritten(css, page).0, expected, "{css}");
         }
-        assert_eq!(found(".a{background:url(a.png)}", None), ["image a.png"]);
-        let base = page_base("https://app.example.com/shop/item");
-        let budget = AtomicUsize::new("https://app.example.com/img/a.png".len());
-        let mut named = Vec::new();
-        image_urls(
-            ".a{background:url(/img/a.png)} .b{background:url(/img/b.png)}",
-            &mut Resolver::new(base.as_ref(), Some(&budget)),
-            &mut |url| {
-                if let CssUrl::Resolved(url) | CssUrl::Unresolved(url) = url {
-                    named.push(url.to_owned());
-                }
-            },
-        );
-        assert_eq!(
-            named,
-            ["https://app.example.com/img/a.png", "url(/img/b.png)"]
-        );
-        let rewritten = rewrite_functions("url(/a.png) image-set( url(/a.png)", &mut |function| {
-            (function == "url(/a.png)").then(|| "url(x)".to_owned())
-        });
-        assert_eq!(rewritten.as_deref(), Some("url(x) image-set( url(/a.png)"));
         let many: Vec<String> = (1..=MAX_IMAGE_SET_CANDIDATES + 1)
             .map(|i| format!("url(https://cdn.example.com/{i}.png) {i}x"))
             .collect();
-        let named = found(
+        let (_, seen) = rewritten(
             &format!(".a{{background:image-set({})}}", many.join(", ")),
             page,
         );
-        assert_eq!(named.len(), many.len());
-        assert!(
-            named.iter().all(|url| url.starts_with("unshown ")),
-            "{named:?}"
+        assert_eq!(seen.len(), many.len());
+        assert!(seen.iter().all(|url| url.starts_with('!')), "{seen:?}");
+    }
+
+    #[test]
+    fn counts_the_sets_it_cuts_and_the_urls_it_resolves() {
+        let mut counts = CssRewriteCounts::default();
+        rewrite_css(
+            "url(/a.png), image-set(url(https://cdn.example.com/1x.png) 1x, url(https://cdn.example.com/2x.png) 2x)",
+            CssKind::Value,
+            None,
+            &mut |_| None,
+            &mut counts,
+        );
+        assert_eq!(
+            counts,
+            CssRewriteCounts {
+                image_sets: 1,
+                relative_urls: 0,
+                unresolved: 1,
+            }
         );
     }
 }
