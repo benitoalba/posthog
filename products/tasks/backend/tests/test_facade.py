@@ -37,7 +37,6 @@ from products.tasks.backend.facade.profiles import (
     Read,
     Repository,
     SourceKind,
-    TaskProfileError,
     TaskRunOptions,
     TaskSource,
     get_task_profile,
@@ -54,6 +53,10 @@ from products.tasks.backend.models import (
 )
 from products.tasks.backend.prompts import WIZARD_HEAD_BRANCH_PLACEHOLDER, build_wizard_pr_agent_prompt
 from products.tasks.backend.run_options import run_options_record
+from products.tasks.backend.task_profiles import USER
+
+SIGNAL_REPORT_PROFILE = get_task_profile("signals.custom_agent")
+SLACK_PROFILE = get_task_profile("slack")
 
 REPORT_ID = "0f7a6c1e-3b8d-4f2a-9c5e-1d2b3a4c5e6f"
 
@@ -2020,7 +2023,7 @@ class TestFacadeReadsAndMappers(TestCase):
             team=self.team,
             title="Created via facade",
             description="desc",
-            origin_product=facade.TaskOriginProduct.USER_CREATED,
+            profile=USER,
             user_id=self.user.id,
             repository="posthog/posthog",
         )
@@ -2032,38 +2035,20 @@ class TestFacadeReadsAndMappers(TestCase):
 
     @parameterized.expand(
         [
-            (
-                "create_and_run_task_origin",
-                "create_and_run_task",
-                {"origin_product": facade.TaskOriginProduct.BUSINESS_KNOWLEDGE, "internal": True},
-                ("business_knowledge", True, None),
-            ),
-            (
-                "create_and_run_task_profile",
-                "create_and_run_task",
-                {"profile": get_task_profile("business_knowledge")},
-                ("business_knowledge", True, "business_knowledge"),
-            ),
-            (
-                "create_task_without_run_origin",
-                "create_task_without_run",
-                {"origin_product": facade.TaskOriginProduct.BUSINESS_KNOWLEDGE},
-                ("business_knowledge", False, None),
-            ),
-            (
-                "create_task_without_run_profile",
-                "create_task_without_run",
-                {"profile": get_task_profile("business_knowledge")},
-                ("business_knowledge", True, "business_knowledge"),
-            ),
+            ("create_and_run_task", "create_and_run_task", ("business_knowledge", True, "business_knowledge")),
+            ("create_task_without_run", "create_task_without_run", ("business_knowledge", True, "business_knowledge")),
         ]
     )
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
-    def test_facade_creates_a_task_from_an_origin_or_a_profile(
-        self, _name: str, entry: str, origin_kwargs: dict, expected: tuple[str, bool, str | None], _mock_workflow
+    def test_facade_creates_a_task_from_a_profile(
+        self, _name: str, entry: str, expected: tuple[str, bool, str], _mock_workflow
     ) -> None:
         created = getattr(facade, entry)(
-            team=self.team, title="t", description="d", user_id=self.user.id, **origin_kwargs
+            team=self.team,
+            title="t",
+            description="d",
+            user_id=self.user.id,
+            profile=get_task_profile("business_knowledge"),
         )
 
         task = Task.objects.get(id=created if isinstance(created, UUID) else created.task_id)
@@ -2080,7 +2065,7 @@ class TestFacadeReadsAndMappers(TestCase):
             title="t",
             description="d",
             user_id=self.user.id,
-            origin_product=facade.TaskOriginProduct.USER_CREATED,
+            profile=USER,
             options=options,
         )
 
@@ -2097,28 +2082,13 @@ class TestFacadeReadsAndMappers(TestCase):
             title="t",
             description="d",
             user_id=self.user.id,
-            origin_product=facade.TaskOriginProduct.USER_CREATED,
+            profile=get_task_profile("workflow"),
             source=TaskSource(kind=SourceKind.HOG_FLOW, id=str(flow_id)),
         )
 
         task = Task.objects.get(id=created if isinstance(created, UUID) else created.task_id)
         self.assertEqual(task.hog_flow_id, flow_id)
         self.assertEqual((task.source_kind, task.source_id), ("hog_flow", str(flow_id)))
-
-    @parameterized.expand(
-        [
-            ("create_and_run_task_neither", "create_and_run_task", {}),
-            ("create_and_run_task_internal_only", "create_and_run_task", {"internal": True}),
-            ("create_and_run_task_empty_origin", "create_and_run_task", {"origin_product": ""}),
-            ("create_task_without_run_neither", "create_task_without_run", {}),
-            ("create_task_without_run_empty_origin", "create_task_without_run", {"origin_product": ""}),
-        ]
-    )
-    def test_facade_refuses_a_task_with_no_profile_or_origin(self, _name: str, entry: str, origin_kwargs: dict) -> None:
-        with self.assertRaises(TaskProfileError):
-            getattr(facade, entry)(team=self.team, title="t", description="d", user_id=self.user.id, **origin_kwargs)
-
-        self.assertFalse(Task.objects.filter(team=self.team, title="t").exists())
 
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
     def test_slack_report_link_is_idempotent_and_does_not_claim_implementation(self, _mock_workflow):
@@ -2134,7 +2104,7 @@ class TestFacadeReadsAndMappers(TestCase):
             team=self.team,
             title="Started from a Slack thread",
             description="desc",
-            origin_product=facade.TaskOriginProduct.SLACK,
+            profile=SLACK_PROFILE,
             user_id=self.user.id,
         )
         for _ in range(2):
@@ -2193,7 +2163,7 @@ class TestFacadeReadsAndMappers(TestCase):
             team=self.team,
             title="Created via facade",
             description="desc",
-            origin_product=facade.TaskOriginProduct.USER_CREATED,
+            profile=USER,
             user_id=self.user.id,
             repository="posthog/posthog",
             create_pr=False,
@@ -2242,7 +2212,7 @@ class TestFacadeReadsAndMappers(TestCase):
             team=self.team,
             title="Created via facade",
             description="desc",
-            origin_product=facade.TaskOriginProduct.USER_CREATED,
+            profile=USER,
             user_id=self.user.id,
             repository="posthog/posthog",
             channel_id=channel_id,
@@ -2676,7 +2646,7 @@ class TestSelfDrivingQuotaFacadeGates(TestCase):
                 team=self.team,
                 title="Implementation: t",
                 description="d",
-                origin_product=facade.TaskOriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=self.user.id,
                 repository="posthog/posthog",
                 **report_kwargs,
@@ -2699,7 +2669,7 @@ class TestSelfDrivingQuotaFacadeGates(TestCase):
                 team=self.team,
                 title="Research: t",
                 description="d",
-                origin_product=facade.TaskOriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=self.user.id,
                 repository="posthog/posthog",
                 create_pr=False,
@@ -2724,7 +2694,7 @@ class TestSelfDrivingQuotaFacadeGates(TestCase):
                 team=self.team,
                 title="Implementation: t",
                 description="d",
-                origin_product=facade.TaskOriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=self.user.id,
                 repository="posthog/posthog",
             )
@@ -2741,7 +2711,7 @@ class TestSelfDrivingQuotaFacadeGates(TestCase):
                 team=self.team,
                 title="User task",
                 description="d",
-                origin_product=facade.TaskOriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=self.user.id,
                 repository="posthog/posthog",
             )
@@ -3201,7 +3171,7 @@ class TestSelfDrivingFreeTrialFacadeGates(TestCase):
                 team=self.team,
                 title="Implementation: t",
                 description="d",
-                origin_product=facade.TaskOriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=self.user.id,
                 repository="posthog/posthog",
             )
@@ -3216,7 +3186,7 @@ class TestSelfDrivingFreeTrialFacadeGates(TestCase):
                 team=self.team,
                 title="Implementation: t",
                 description="d",
-                origin_product=facade.TaskOriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=self.user.id,
                 free_trial_enabled=False,
                 start_workflow=False,

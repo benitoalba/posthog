@@ -31,7 +31,6 @@ from products.tasks.backend.facade.profiles import (
     Repository,
     SourceKind,
     TaskProfile,
-    TaskProfileError,
     TaskRunOptions,
     TaskRunOptionsError,
     TaskSource,
@@ -54,6 +53,11 @@ from products.tasks.backend.models import (
     bump_task_activity,
 )
 from products.tasks.backend.run_options import run_options_record
+from products.tasks.backend.task_profiles import USER
+
+SCOUT_PROFILE = get_task_profile("signals.scout")
+SIGNAL_REPORT_PROFILE = get_task_profile("signals.custom_agent")
+SLACK_PROFILE = get_task_profile("slack")
 
 BUSINESS_KNOWLEDGE = get_task_profile("business_knowledge")
 SOURCE_ID = uuid.UUID("5ab01f4d-5b1e-4990-9802-4f8792a76759")
@@ -149,7 +153,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Create and Run",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -172,49 +176,20 @@ class TestTask(TestCase):
         self.assertEqual(task_run.task, task)
         self.assertEqual(task_run.status, TaskRun.Status.QUEUED)
 
-    @parameterized.expand(
-        [
-            (f"{entry}_{path}", entry, origin_kwargs, expected_profile)
-            for entry in ("create_and_run", "create_without_run")
-            for path, origin_kwargs, expected_profile in (
-                ("origin", {"origin_product": Task.OriginProduct.BUSINESS_KNOWLEDGE, "internal": True}, None),
-                ("profile", {"profile": BUSINESS_KNOWLEDGE}, "business_knowledge"),
-            )
-        ]
-    )
+    @parameterized.expand([("create_and_run",), ("create_without_run",)])
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
-    def test_task_creation_stores_the_same_origin_from_an_origin_or_a_profile(
-        self, name: str, entry: str, origin_kwargs: dict, expected_profile: str | None, _mock_execute_workflow
-    ) -> None:
-        user = User.objects.create(email=f"{name}@test.com")
+    def test_task_creation_stores_the_profile_and_its_origin(self, entry: str, _mock_execute_workflow) -> None:
+        user = User.objects.create(email=f"{entry}@test.com")
 
-        task = getattr(Task, entry)(team=self.team, title="t", description="d", user_id=user.id, **origin_kwargs)
+        task = getattr(Task, entry)(
+            team=self.team, title="t", description="d", user_id=user.id, profile=BUSINESS_KNOWLEDGE
+        )
 
         task.refresh_from_db()
         self.assertEqual(
-            (task.origin_product, task.internal, task.profile), ("business_knowledge", True, expected_profile)
+            (task.origin_product, task.internal, task.profile),
+            ("business_knowledge", True, "business_knowledge"),
         )
-
-    @parameterized.expand(
-        [
-            (f"{entry}_{path}", entry, origin_kwargs)
-            for entry in ("create_and_run", "create_without_run")
-            for path, origin_kwargs in (
-                ("neither", {}),
-                ("internal_only", {"internal": True}),
-                ("empty_origin", {"origin_product": ""}),
-            )
-        ]
-    )
-    def test_task_creation_refuses_a_task_with_no_profile_or_origin(
-        self, name: str, entry: str, origin_kwargs: dict
-    ) -> None:
-        user = User.objects.create(email=f"{name}@test.com")
-
-        with self.assertRaises(TaskProfileError):
-            getattr(Task, entry)(team=self.team, title="t", description="d", user_id=user.id, **origin_kwargs)
-
-        self.assertFalse(Task.objects.filter(team=self.team).exists())
 
     @parameterized.expand(
         [
@@ -258,7 +233,7 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=USER,
         )
 
         legacy = create(**legacy_kwargs)
@@ -312,7 +287,7 @@ class TestTask(TestCase):
                 title="t",
                 description="d",
                 user_id=user.id,
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 options=options,
                 **legacy_kwargs,
             )
@@ -341,7 +316,7 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=USER,
             options=TaskRunOptions(github_access=github_access) if github_access else None,
         )
 
@@ -360,7 +335,8 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.WORKFLOW,
+            profile=get_task_profile("workflow"),
+            source=FLOW_SOURCE,
             mcp_builtin_agent_key="workflow",
         )
 
@@ -377,11 +353,11 @@ class TestTask(TestCase):
 
     @parameterized.expand(
         [
-            ("runtime", TaskRunOptions(runtime="pi"), None, ("pi", [])),
+            ("runtime", TaskRunOptions(runtime="pi"), USER, ("pi", [])),
             (
                 "repositories",
                 TaskRunOptions(repositories=(Repository(name="posthog/posthog"),)),
-                None,
+                USER,
                 ("acp", ["posthog/posthog"]),
             ),
             ("profile_runtime", None, PI_PROFILE, ("pi", [])),
@@ -397,19 +373,14 @@ class TestTask(TestCase):
         self,
         name: str,
         options: TaskRunOptions | None,
-        profile: TaskProfile | None,
+        profile: TaskProfile,
         expected: tuple[str, list[str]],
     ) -> None:
         user = User.objects.create(email=f"{name}@test.com")
         Integration.objects.create(team=self.team, kind="github", config={})
 
         task = Task.create_without_run(
-            team=self.team,
-            title="t",
-            description="d",
-            user_id=user.id,
-            **({"profile": profile} if profile else {"origin_product": Task.OriginProduct.USER_CREATED}),
-            options=options,
+            team=self.team, title="t", description="d", user_id=user.id, profile=profile, options=options
         )
 
         task.refresh_from_db()
@@ -434,15 +405,23 @@ class TestTask(TestCase):
                 title="t",
                 description="d",
                 user_id=user.id,
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 options=options,
             )
 
         self.assertFalse(Task.objects.filter(team=self.team).exists())
 
-    @parameterized.expand([(SourceKind.SIGNAL_REPORT,), (SourceKind.HOG_FLOW,), (SourceKind.LOOP,)])
+    @parameterized.expand(
+        [
+            (SourceKind.SIGNAL_REPORT, get_task_profile("signals.inbox")),
+            (SourceKind.HOG_FLOW, get_task_profile("workflow")),
+            (SourceKind.LOOP, replace(USER, key="test.loop_source", source_kind=SourceKind.LOOP)),
+        ]
+    )
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
-    def test_task_creation_stores_its_source(self, kind: SourceKind, _mock_execute_workflow) -> None:
+    def test_task_creation_stores_its_source(
+        self, kind: SourceKind, profile: TaskProfile, _mock_execute_workflow
+    ) -> None:
         from products.signals.backend.models import SignalReport
 
         user = User.objects.create(email=f"{kind}@test.com")
@@ -453,7 +432,7 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=profile,
             source=TaskSource(kind=kind, id=str(source_id)),
         )
 
@@ -468,14 +447,19 @@ class TestTask(TestCase):
 
     @parameterized.expand(
         [
-            ("signal_report_id", {"signal_report_id": "report"}, SourceKind.SIGNAL_REPORT),
-            ("hog_flow_id", {"hog_flow_id": SOURCE_ID}, SourceKind.HOG_FLOW),
-            ("no_source", {}, None),
+            (
+                "signal_report_id",
+                get_task_profile("signals.inbox"),
+                {"signal_report_id": "report"},
+                SourceKind.SIGNAL_REPORT,
+            ),
+            ("hog_flow_id", get_task_profile("workflow"), {"hog_flow_id": SOURCE_ID}, SourceKind.HOG_FLOW),
+            ("no_source", USER, {}, None),
         ]
     )
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
     def test_task_creation_stores_the_source_given_as_old_columns(
-        self, name: str, columns: dict, kind: SourceKind | None, _mock_execute_workflow
+        self, name: str, profile: TaskProfile, columns: dict, kind: SourceKind | None, _mock_execute_workflow
     ) -> None:
         from products.signals.backend.models import SignalReport
 
@@ -488,7 +472,7 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=profile,
             **columns,
         )
 
@@ -508,7 +492,7 @@ class TestTask(TestCase):
             title="t",
             description="d",
             user_id=user.id,
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=USER,
             origin_key=origin_key,
         )
 
@@ -517,18 +501,8 @@ class TestTask(TestCase):
 
     @parameterized.expand(
         [
-            (
-                "source_and_column",
-                {"origin_product": Task.OriginProduct.USER_CREATED, "hog_flow_id": SOURCE_ID, "source": FLOW_SOURCE},
-            ),
-            (
-                "both_old_columns",
-                {
-                    "origin_product": Task.OriginProduct.USER_CREATED,
-                    "signal_report_id": str(SOURCE_ID),
-                    "hog_flow_id": SOURCE_ID,
-                },
-            ),
+            ("source_and_column", {"profile": USER, "hog_flow_id": SOURCE_ID, "source": FLOW_SOURCE}),
+            ("both_old_columns", {"profile": USER, "signal_report_id": str(SOURCE_ID), "hog_flow_id": SOURCE_ID}),
             ("profile_takes_no_source", {"profile": BUSINESS_KNOWLEDGE, "source": FLOW_SOURCE}),
             ("profile_takes_no_legacy_source", {"profile": BUSINESS_KNOWLEDGE, "hog_flow_id": SOURCE_ID}),
             (
@@ -565,7 +539,7 @@ class TestTask(TestCase):
                         team=self.team,
                         title="Task creation capture",
                         description="Test description",
-                        origin_product=Task.OriginProduct.USER_CREATED,
+                        profile=USER,
                         user_id=user.id,
                         start_workflow=False,
                         before_task_dispatch=before_dispatch,
@@ -599,7 +573,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Stream routing task",
                 description="Test description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 start_workflow=False,
                 extra_run_state=extra_state,
@@ -622,7 +596,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Multi-repo run",
                 description="Test Description",
-                origin_product=Task.OriginProduct.SIGNALS_SCOUT,
+                profile=SCOUT_PROFILE,
                 user_id=user.id,
                 repositories=["PostHog/PostHog", "posthog/posthog-js"],
             )
@@ -651,7 +625,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Implementation",
                 description="Test Description",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 github_access_repositories=granted,
@@ -675,7 +649,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Scout run",
                 description="repo-less run wanting gh evidence access",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
                 github_read_access=True,
             )
@@ -701,7 +675,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Plain run",
                 description="no gh access requested",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
             )
         state = TaskRun.objects.get(id=mock_execute_workflow.call_args.kwargs["run_id"]).state
@@ -717,7 +691,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Slack Task",
                 description="Slack Description",
-                origin_product=Task.OriginProduct.SLACK,
+                profile=SLACK_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 runtime=Task.Runtime.PI,
@@ -747,7 +721,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Slack Task",
                 description="Slack Description",
-                origin_product=Task.OriginProduct.SLACK,
+                profile=SLACK_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 **kwargs,
@@ -766,7 +740,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Slack Task",
                 description="Slack Description",
-                origin_product=Task.OriginProduct.SLACK,
+                profile=SLACK_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 sandbox_template="autoresearch_base",
@@ -778,14 +752,13 @@ class TestTask(TestCase):
 
     @parameterized.expand(
         [
-            (Task.OriginProduct.SIGNALS_CHAT, None),
-            (Task.OriginProduct.SIGNAL_REPORT, None),
-            (Task.OriginProduct.SIGNALS_SCOUT_SUGGESTIONS, None),
-            (Task.OriginProduct.AUTORESEARCH, None),
-            (Task.OriginProduct.ACCOUNT_AUDIT, None),
-            (None, NO_GITHUB_PROFILE),
+            (get_task_profile("signals.chat"),),
+            (get_task_profile("signals.custom_agent"),),
+            (get_task_profile("signals.scout_suggestions"),),
+            (get_task_profile("autoresearch.training"),),
+            (get_task_profile("account_audit"),),
+            (NO_GITHUB_PROFILE,),
             (
-                None,
                 replace(
                     BUSINESS_KNOWLEDGE,
                     key="test.github_with_repository",
@@ -796,7 +769,7 @@ class TestTask(TestCase):
     )
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
     def test_create_and_run_attaches_no_github_integration_to_a_repo_less_restricted_origin(
-        self, origin_product, profile, mock_execute_workflow
+        self, profile, mock_execute_workflow
     ):
         user = User.objects.create(email="test@test.com")
         Integration.objects.create(team=self.team, kind="github", config={})
@@ -806,7 +779,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Repo-less task",
                 description="No repository",
-                **({"profile": profile} if profile else {"origin_product": origin_product}),
+                profile=profile,
                 user_id=user.id,
             )
 
@@ -927,7 +900,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Slack Task",
                 description="Slack Description",
-                origin_product=Task.OriginProduct.SLACK,
+                profile=SLACK_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 sandbox_template="autoresearch_base",
@@ -956,7 +929,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Signal Task",
                 description="Signal Description",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
                 ai_stage="research",
@@ -978,7 +951,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Plain Task",
                 description="Plain Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1088,7 +1061,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Plain Task",
                 description="Plain Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1107,7 +1080,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog-js",
             )
@@ -1126,7 +1099,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="invalid-format",
             )
@@ -1143,7 +1116,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/hedgebox",
             )
@@ -1163,7 +1136,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repositories=["posthog/hedgebox", "acme/private"],
             )
@@ -1179,7 +1152,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1197,7 +1170,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Test Task",
                 description="Test Description",
-                origin_product=Task.OriginProduct.USER_CREATED,
+                profile=USER,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1231,7 +1204,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Signal Report",
                 description="Research",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1242,8 +1215,8 @@ class TestTask(TestCase):
 
     @parameterized.expand(
         [
-            ("connected_creator", True, None, "user"),
-            ("creator_without_personal_github", False, None, "bot"),
+            ("connected_creator", True, get_task_profile("posthog_ai"), "user"),
+            ("creator_without_personal_github", False, get_task_profile("posthog_ai"), "bot"),
             ("profile_without_user_authorable_prs", True, POSTHOG_AI_BOT_PROFILE, None),
         ]
     )
@@ -1265,17 +1238,12 @@ class TestTask(TestCase):
             else None
         )
 
-        registered = {profile.key: profile} if profile else {}
         with (
-            patch.dict("products.tasks.backend.facade.profiles._profiles", registered),
+            patch.dict("products.tasks.backend.facade.profiles._profiles", {profile.key: profile}),
             self.captureOnCommitCallbacks(execute=True),
         ):
             task = Task.create_and_run(
-                team=self.team,
-                title="PostHog AI",
-                description="Repo-less",
-                **({"profile": profile} if profile else {"origin_product": Task.OriginProduct.POSTHOG_AI}),
-                user_id=user.id,
+                team=self.team, title="PostHog AI", description="Repo-less", profile=profile, user_id=user.id
             )
 
         self.assertIsNone(task.github_integration)
@@ -1293,7 +1261,7 @@ class TestTask(TestCase):
                 team=self.team,
                 title="Signal Report",
                 description="Research",
-                origin_product=Task.OriginProduct.SIGNAL_REPORT,
+                profile=SIGNAL_REPORT_PROFILE,
                 user_id=user.id,
                 repository="posthog/posthog",
             )
@@ -1396,39 +1364,27 @@ class TestTask(TestCase):
         task.refresh_from_db()
         self.assertIsNotNone(task.id)
 
+    @parameterized.expand(
+        [("listed_profile", USER, False), ("unlisted_profile", get_task_profile("task_analysis"), True)]
+    )
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
-    def test_create_and_run_internal_defaults_to_false(self, mock_execute_workflow):
-        user = User.objects.create(email="internal_default@test.com")
+    def test_create_and_run_takes_internal_from_the_profile(
+        self, name: str, profile: TaskProfile, internal: bool, mock_execute_workflow
+    ):
+        user = User.objects.create(email=f"{name}@test.com")
         Integration.objects.create(team=self.team, kind="github", config={})
 
         task = Task.create_and_run(
             team=self.team,
-            title="Non-internal Task",
+            title="Task",
             description="Description",
-            origin_product=Task.OriginProduct.USER_CREATED,
+            profile=profile,
             user_id=user.id,
             repository="posthog/posthog",
-        )
-
-        self.assertFalse(task.internal)
-
-    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
-    def test_create_and_run_with_internal_true(self, mock_execute_workflow):
-        user = User.objects.create(email="internal_true@test.com")
-        Integration.objects.create(team=self.team, kind="github", config={})
-
-        task = Task.create_and_run(
-            team=self.team,
-            title="Internal Task",
-            description="Description",
-            origin_product=Task.OriginProduct.USER_CREATED,
-            user_id=user.id,
-            repository="posthog/posthog",
-            internal=True,
         )
 
         task.refresh_from_db()
-        self.assertTrue(task.internal)
+        self.assertIs(task.internal, internal)
 
 
 class TestTaskActivityClock(TestCase):
