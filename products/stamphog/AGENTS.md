@@ -124,7 +124,7 @@ A repository may name a bot in `bot_authors` in its default-branch `.stamphog/po
 
 - The server admits a delivery (`_bot_author_admission`) only on facts GitHub attests: the author's login and numeric id, a head in the base repository on a branch under `branch_prefix`, a sender that is the bot itself, and PR commits that are all authored by the bot's id, committed by `web-flow` and verified. A login alone is never enough.
 - A push by anyone else to the bot's PR sets `PullRequest.bot_admission_revoked_at`, and people review that PR for good. A later push by the bot need not remove the other commit, so nothing restores the admission.
-- The run carries `bot_author_review` provenance, which turns on the engine flag. The engine matches the author against its own effective policy again and adds the attestations gate. A file that no passing attestation lists blocks the approval, and only unattested files count toward the size gate.
+- The run carries `bot_author_review` provenance, which turns on the engine flag. The engine matches the author against its own effective policy again and adds the attestations gate. A file that no passing attestation lists blocks the approval, and only unattested files count toward the size gate. The worker's `--attest` check reads the same flag, so it confirms an admitted bot's approval and refuses every other bot.
 - These runs bypass the review-mode and write-permission gates like inbox runs, and never retain an approval across a push. A refusal is not handed to ReviewHog: the PR's assigned owners read it.
 - A re-review after a WAIT (`_rereview_waiting_run`) repeats every check except the sender, because the run it re-reviews was admitted on the bot's own delivery for the same head.
 

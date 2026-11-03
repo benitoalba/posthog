@@ -832,6 +832,8 @@ def test_admitted_bot_needs_ci_to_attest_every_file(
     assert outcome["final"] is (expected_verdict != "APPROVED")
     if outcome["final"]:
         assert outcome["result"]["final_verdict"] == expected_verdict
+    # The worker's check before posting must confirm exactly the approvals the full review reaches.
+    assert review_local.attest(context)["attested"] is (expected_verdict == "APPROVED")
 
 
 @pytest.mark.parametrize(

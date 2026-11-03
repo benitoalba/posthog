@@ -619,6 +619,7 @@ def attest(context: dict) -> dict:
         review_trigger=str(context.get("review_trigger") or ""),
         head_checkout=True,
         checkout=False,
+        bot_author_review=bool(context.get("bot_author_review")),
     )
     pipeline.pr = _build_pr_data(context, checkout=False)
 
@@ -626,7 +627,7 @@ def attest(context: dict) -> dict:
         gates = [{"gate": g.gate, "passed": g.passed, "message": g.message} for g in pipeline.gate_results]
         return {"attested": not reason, "reason": reason, "gates": gates}
 
-    if pipeline.pr.author_is_bot and not pipeline.self_driving:
+    if pipeline.refuses_bot_author():
         return outcome("bot_author")
     if context.get("folder_policies_known") is not True:
         return outcome("folder_policies_unknown")
