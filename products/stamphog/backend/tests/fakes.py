@@ -194,6 +194,8 @@ class GitHubRecorder:
         # Repositories with no commits at all. GitHub answers their head lookup with a null
         # defaultBranchRef, which is what a freshly created connected repo looks like.
         self.empty_repositories: set[str] = set()
+        # The head commit's check runs, whatever head is asked for.
+        self.check_runs: list[dict] = []
         self.github_writes: list[dict[str, Any]] = []
         self._next_id = 90000
 
@@ -240,7 +242,8 @@ class GitHubRecorder:
                 200, json_data={"merge_base_commit": {"sha": self.merge_base_sha}, "files": self.compare_files}
             )
         if method == "GET" and _CHECK_RUNS_RE.match(path):
-            return FakeResponse(200, json_data={"check_runs": []})
+            page = int(params.get("page", 1))
+            return FakeResponse(200, json_data={"check_runs": self.check_runs if page == 1 else []})
         if method == "GET" and (m := _COLLABORATOR_PERMISSION_RE.match(path)):
             permission = self.collaborator_permissions.get((m.group("repo"), m.group("username")), "write")
             return FakeResponse(200, json_data={"permission": permission})

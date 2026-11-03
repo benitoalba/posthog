@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from django.core.cache import cache
 from django.db import IntegrityError, router, transaction
-from django.db.models import Q, QuerySet
+from django.db.models import F, Q, QuerySet
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -25,6 +25,7 @@ from celery import Task, shared_task
 
 from posthog.dataclasses import frozen
 from posthog.egress.github.transport import GitHubRateLimitError
+from posthog.ingress.dispatch.database import bounded_statement_timeout
 from posthog.models.instance_setting import get_instance_setting
 from posthog.models.team import Team
 
@@ -146,6 +147,11 @@ _AUTHOR_PERMISSION_DENY_CACHE_SECONDS = 10 * 60
 
 _REREVIEW_MAX_RETRIES = 4
 _REREVIEW_RETRY_BASE_SECONDS = 30
+# The check_run filter runs inside the webhook request, under its delivery budget.
+_CHECK_RUN_LOOKUP_TIMEOUT_MS = 2000
+
+# A WAIT the engine reached (COMPLETED) or the gates reached (GATED), which a later event can wake.
+WAKEABLE_WAIT_STATUSES = (ReviewRunStatus.COMPLETED, ReviewRunStatus.GATED)
 
 
 # Anchored to the canonical host so a lookalike ("fakegithub.com", a github.com path segment on
@@ -1539,7 +1545,7 @@ def _queue_review_at_head(
             .exclude(status__in=(ReviewRunStatus.SUPERSEDED, ReviewRunStatus.FAILED))
         )
         if revisit_wait:
-            covering_runs = covering_runs.exclude(status=ReviewRunStatus.COMPLETED, verdict=ReviewVerdict.WAIT)
+            covering_runs = covering_runs.exclude(status__in=WAKEABLE_WAIT_STATUSES, verdict=ReviewVerdict.WAIT)
         existing = covering_runs.order_by("-created_at").first()
         # A retarget changes the diff without moving the head, and in label mode no webhook run
         # replaces the old verdict. A run that reviewed another base branch does not cover this one.
@@ -1808,8 +1814,26 @@ def request_manual_review(team_id: int, user_id: int | None, repository: str, pr
     return QueuedReview(run=queued.run, created=queued.created)
 
 
-def _rereview_waiting_run(repo_config: StamphogRepoConfig, pr_number: int, head_sha: str) -> None:
-    """Queue a new review when this PR's latest verdict is a WAIT at ``head_sha`` that is still the PR head."""
+def pending_attestation_checks(run: ReviewRun) -> set[str]:
+    """The check runs whose completion this run's WAIT waits on, as its gates recorded them."""
+    if run.status not in WAKEABLE_WAIT_STATUSES or run.verdict != ReviewVerdict.WAIT:
+        return set()
+    classification = (run.gate_result or {}).get("classification") or {}
+    return {
+        item["check"]
+        for item in classification.get("pending_attestations") or []
+        if isinstance(item, dict) and isinstance(item.get("check"), str)
+    }
+
+
+def _rereview_waiting_run(
+    repo_config: StamphogRepoConfig, pr_number: int, head_sha: str, completed_check: str | None = None
+) -> None:
+    """Queue a new review when this PR's latest verdict is a WAIT at ``head_sha`` that is still the PR head.
+
+    With ``completed_check``, only a WAIT on an attestation that this check completes counts. The
+    gates decided that WAIT, so the run is GATED rather than COMPLETED.
+    """
     team_id = repo_config.team_id
     latest = (
         ReviewRun.objects.for_team(team_id)
@@ -1822,7 +1846,10 @@ def _rereview_waiting_run(repo_config: StamphogRepoConfig, pr_number: int, head_
         return
     previous_output = latest.output or {}
     # Only an engine WAIT can change when another reviewer finishes. A GATED WAIT waits on a check.
-    waiting = latest.status == ReviewRunStatus.COMPLETED and latest.verdict == ReviewVerdict.WAIT
+    if completed_check is None:
+        waiting = latest.status == ReviewRunStatus.COMPLETED and latest.verdict == ReviewVerdict.WAIT
+    else:
+        waiting = completed_check in pending_attestation_checks(latest)
     # A run that an earlier call queued and whose workflow start failed stays QUEUED. Queueing again
     # restarts its workflow, so a retry or a later call recovers it.
     stranded = latest.status == ReviewRunStatus.QUEUED and bool(previous_output.get("rereview_after_external_review"))
@@ -1859,7 +1886,9 @@ def _rereview_waiting_run(repo_config: StamphogRepoConfig, pr_number: int, head_
 
 
 @shared_task(bind=True, ignore_result=True, max_retries=_REREVIEW_MAX_RETRIES)
-def rereview_after_external_review(self: Task, repository: str, pr_number: int, head_sha: str) -> None:
+def rereview_after_external_review(
+    self: Task, repository: str, pr_number: int, head_sha: str, completed_check: str | None = None
+) -> None:
     """Re-run a review that ended in WAIT, because an automated reviewer finished with ``head_sha``.
 
     The caller knows only the repository, so the configs are read across teams. Each config acts on
@@ -1875,7 +1904,7 @@ def rereview_after_external_review(self: Task, repository: str, pr_number: int, 
     )
     try:
         for repo_config in repo_configs:
-            _rereview_waiting_run(repo_config, pr_number, head_sha)
+            _rereview_waiting_run(repo_config, pr_number, head_sha, completed_check)
     except GitHubRateLimitError as e:
         logger.warning("stamphog_rereview_rate_limited", repository=repository, pr_number=pr_number)
         raise self.retry(exc=e, countdown=max(e.retry_after or 0, 60))
@@ -1884,11 +1913,63 @@ def rereview_after_external_review(self: Task, repository: str, pr_number: int, 
         raise self.retry(exc=e, countdown=_REREVIEW_RETRY_BASE_SECONDS * 2**self.request.retries)
 
 
-def request_rereview_after_external_review(*, repository: str, pr_number: int, head_sha: str) -> None:
+def request_rereview_after_external_review(
+    *, repository: str, pr_number: int, head_sha: str, completed_check: str | None = None
+) -> None:
     """Tell stamphog that an automated review of ``head_sha`` finished, without waiting.
 
     Called by review_hog when a review turn ends, completed or failed. Stamphog decides whether
     anything happens: it re-reviews only a PR whose latest verdict is a WAIT at that head, while the
     head is still current. Any other call is a no-op, so a caller may call it for every turn.
+    ``completed_check`` names a finished check run instead, which wakes only a WAIT on that check.
     """
-    rereview_after_external_review.delay(repository=repository, pr_number=pr_number, head_sha=head_sha)
+    rereview_after_external_review.delay(
+        repository=repository, pr_number=pr_number, head_sha=head_sha, completed_check=completed_check
+    )
+
+
+def request_rereview_on_check_completed(payload: dict[str, Any]) -> None:
+    """Wake a review that waits on an attestation when a check run that completes it finishes.
+
+    Every check run in an installed repository arrives here, so the filter is one read that walks
+    indexes from the installation's repo config down to the runs at this head, and only a PR whose
+    latest run is a WAIT on this check reaches the Celery task.
+    GitHub lists only same-repository PRs on a check run, which is the only kind an attestation covers.
+    A check created already completed may arrive as ``created`` alone, so the status decides, not the action.
+    """
+    check_run = payload.get("check_run") or {}
+    installation_id = str((payload.get("installation") or {}).get("id") or "")
+    repository = (payload.get("repository") or {}).get("full_name") or ""
+    head_sha = check_run.get("head_sha") or ""
+    check_name = check_run.get("name") or ""
+    pr_numbers = [
+        item["number"]
+        for item in check_run.get("pull_requests") or []
+        if isinstance(item, dict) and isinstance(item.get("number"), int)
+    ]
+    if check_run.get("status") != "completed" or not (
+        installation_id and repository and head_sha and check_name and pr_numbers
+    ):
+        return
+    run_db = router.db_for_write(ReviewRun)
+    with bounded_statement_timeout(_CHECK_RUN_LOOKUP_TIMEOUT_MS, aliases=[run_db]):
+        waiting = list(
+            ReviewRun.objects.unscoped()
+            .using(run_db)
+            .filter(
+                pull_request__repo_config__provider="github",
+                pull_request__repo_config__installation_id=installation_id,
+                pull_request__repo_config__repository=repository,
+                pull_request__pr_number__in=pr_numbers,
+                head_sha=head_sha,
+                status__in=WAKEABLE_WAIT_STATUSES,
+                verdict=ReviewVerdict.WAIT,
+            )
+            .annotate(pr_number=F("pull_request__pr_number"))
+            .only("status", "verdict", "gate_result")
+        )
+    woken = {run.pr_number for run in waiting if check_name in pending_attestation_checks(run)}
+    for pr_number in woken:
+        rereview_after_external_review.delay(
+            repository=repository, pr_number=pr_number, head_sha=head_sha, completed_check=check_name
+        )

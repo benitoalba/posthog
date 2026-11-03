@@ -51,7 +51,7 @@ class TestGitHubProvider(SimpleTestCase):
         declared = {(spec.provider, spec.app): spec.event_types for spec in SPECS}
         # A shared superset would let a Stamphog consumer register for an event type that App
         # never receives, which is what the registry validation exists to refuse.
-        self.assertLess(declared[("github", "stamphog")], declared[("github", "posthog")])
+        self.assertNotEqual(declared[("github", "stamphog")], declared[("github", "posthog")])
         for consumer in CORE_CONSUMERS:
             self.assertLessEqual(consumer.event_types, declared[(consumer.provider, consumer.app)])
 

@@ -17,8 +17,12 @@ def _run_review(delivery: WebhookDelivery) -> None:
     from products.stamphog.backend.facade.tasks import (  # noqa: PLC0415 - keeps the GitHub and Temporal clients off the registry's import path
         process_installation_event,
         process_pull_request_event,
+        request_rereview_on_check_completed,
     )
 
+    if delivery.event_type == "check_run":
+        request_rereview_on_check_completed(dict(delivery.payload))
+        return
     task = process_installation_event if delivery.event_type in _INSTALLATION_EVENTS else process_pull_request_event
     cast(Any, task).delay(payload=dict(delivery.payload), delivery_id=delivery.delivery_id or "")
 
@@ -28,7 +32,8 @@ WEBHOOK_CONSUMERS = (
         name="stamphog_review",
         provider="github",
         app="stamphog",
-        event_types=frozenset({"pull_request"}) | _INSTALLATION_EVENTS,
+        # A finished check run can complete an attestation that a review waits on.
+        event_types=frozenset({"pull_request", "check_run"}) | _INSTALLATION_EVENTS,
         handler=_run_review,
         # The task resumes its own work off `delivery_id`, so a redelivery is how a run that
         # never finished gets picked up again. An ingress mark would hold that off for 24 h.

@@ -52,6 +52,9 @@ class PRData:
     # reviewer, review_kind, findings_count, published, head_sha, base_ref, base_sha and skipped_paths. Trusted
     # metadata, never PR text. Empty for the Action, which has no such source.
     review_evidence: list[dict] = field(default_factory=list)
+    # Set by the hosted server: each Actions attestation's run, looked up by name (see attestations.py).
+    # Empty for a local run, where such an attestation lifts nothing.
+    attestation_results: dict[str, dict] = field(default_factory=dict)
 
     def pending_review_evidence(self) -> list[dict]:
         """The external reviews still running on the current head."""

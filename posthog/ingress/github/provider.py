@@ -37,7 +37,7 @@ GITHUB_EVENT_TYPES = frozenset(
 )
 
 # The Stamphog App reviews pull requests and keeps its repo-config rows in step with GitHub.
-STAMPHOG_EVENT_TYPES = frozenset({"pull_request", "installation", "installation_repositories"})
+STAMPHOG_EVENT_TYPES = frozenset({"pull_request", "check_run", "installation", "installation_repositories"})
 
 
 # Every delivery is verified, so each secret is read under a cache and not once per request. A

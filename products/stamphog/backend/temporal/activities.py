@@ -73,6 +73,7 @@ from products.stamphog.backend.facade.review_evidence import (
     get_review_evidence_providers,
 )
 from products.stamphog.backend.logic.approvals import dismiss_stale_approvals_for_head
+from products.stamphog.backend.logic.attestations import actions_attestation_results, actions_attestations
 from products.stamphog.backend.logic.audiences import resolve_audiences
 from products.stamphog.backend.logic.engine_pregate import (
     ENGINE_DIR,
@@ -99,7 +100,7 @@ from products.stamphog.backend.logic.reviewer import (
 )
 from products.stamphog.backend.logic.scrubbing import neutralize_active_markdown, scrub_credentials
 from products.stamphog.backend.models import PullRequest, PullRequestAudience, ReviewRun, StamphogRepoConfig
-from products.stamphog.backend.tasks.tasks import request_rereview_after_external_review
+from products.stamphog.backend.tasks.tasks import pending_attestation_checks, request_rereview_after_external_review
 from products.stamphog.backend.temporal.constants import (
     ACTIVITY_RETRY_POLICY,
     CLONE_STEP_TIMEOUT_SECONDS,
@@ -613,7 +614,7 @@ def _fetch_review_context(input: StamphogReviewInput) -> dict:
         # Inline review threads (GraphQL-only) carry a maintainer's unresolved "do not merge" that the
         # top-level discussion misses; fails closed on truncation/errors, same as get_pr_discussion.
         review_threads_future = submit("review_threads", client.get_pr_review_threads, repo, number)
-        # Head-commit check runs let the engine's migration gate see a passing "Migration risk" check.
+        # Head-commit check runs carry the check attestations the engine reads (see attestations.py there).
         check_runs_future = submit("check_runs", client.get_check_runs, repo, run.head_sha)
         commit_messages_future = submit("commit_messages", _pr_commit_messages, client, repo, number, run.head_sha)
         reactions_future = submit("pr_reactions", client.get_pr_reactions, repo, number)
@@ -656,6 +657,12 @@ def _fetch_review_context(input: StamphogReviewInput) -> dict:
             content = future.result()
             if content is not None:
                 policy_files[path] = content
+        attestation_rules = actions_attestations(policy_files.get(STAMPHOG_POLICY_ENTRYPOINT))
+        attestation_results_future = (
+            submit("attestation_results", actions_attestation_results, client, repo, pr, attestation_rules)
+            if attestation_rules
+            else None
+        )
         history: ReviewHistory = history_future.result()
 
         context = {
@@ -665,6 +672,7 @@ def _fetch_review_context(input: StamphogReviewInput) -> dict:
             "discussion": discussion_future.result(),
             "review_threads": review_threads_future.result(),
             "check_runs": check_runs_future.result(),
+            "attestation_results": attestation_results_future.result() if attestation_results_future else {},
             "pr_reactions": reactions_future.result(),
             "policy_files": policy_files,
             "author_pr_numbers": author_pr_numbers_future.result() if author_pr_numbers_future else [],
@@ -965,6 +973,7 @@ def _review_invocation(run: ReviewRun, merge_base_sha: str | None) -> ReviewerIn
         check_runs=output.get("check_runs", []),
         pr_reactions=output.get("pr_reactions", []),
         review_evidence=output.get("review_evidence") or [],
+        attestation_results=output.get("attestation_results") or {},
         author_pr_numbers=output.get("author_pr_numbers", []),
         author_team_slugs=output.get("author_team_slugs", []),
         # A run whose context predates the server facts gets None, which the engine reads as an
@@ -1789,14 +1798,36 @@ def _waited_on_external_review(run: ReviewRun) -> bool:
 @activity.defn
 @asyncify
 def rereview_after_external_review_finished(input: StamphogReviewInput) -> dict:
-    """Queue a re-review when this WAIT waited on an external review that finished since the last poll.
+    """Queue a re-review when this WAIT waited on a review or a check that finished since the run read it.
 
-    The external reviewer asks stamphog to re-review when its review ends, but that request finds
-    no WAIT while this run is still in flight and does nothing. So the run asks the providers once
-    more after it saved its WAIT. A dispatch error raises, so Temporal retries it, because a lost
-    dispatch leaves the PR at WAIT until the next push.
+    The external reviewer asks stamphog to re-review when its review ends, and a finished check run
+    does the same through its webhook, but either request finds no WAIT while this run is still in
+    flight and does nothing. So the run looks once more after it saved its WAIT. A dispatch error
+    raises, so Temporal retries it, because a lost dispatch leaves the PR at WAIT until the next push.
     """
     run = _load_run(input)
+    pull_request = run.pull_request
+    repo_config = pull_request.repo_config
+    if checks := pending_attestation_checks(run):
+        check_runs = StamphogGitHubClient(repo_config.installation_id).get_check_runs(
+            repo_config.repository, run.head_sha
+        )
+        finished = min(
+            (
+                check_run["name"]
+                for check_run in check_runs
+                if check_run.get("name") in checks and check_run.get("status") == "completed"
+            ),
+            default=None,
+        )
+        if finished is not None:
+            request_rereview_after_external_review(
+                repository=repo_config.repository,
+                pr_number=pull_request.pr_number,
+                head_sha=run.head_sha,
+                completed_check=finished,
+            )
+            return {"requested": True}
     if not _waited_on_external_review(run):
         return {"requested": False}
     # The run's own evidence is the earlier answer, so a provider error keeps the review pending. A
@@ -1809,7 +1840,6 @@ def rereview_after_external_review_finished(input: StamphogReviewInput) -> dict:
         raise RuntimeError(f"Run {run.id}: a review evidence provider failed; retrying the recheck")
     if pending:
         return {"requested": False}
-    pull_request = run.pull_request
     request_rereview_after_external_review(
         repository=pull_request.repo_config.repository, pr_number=pull_request.pr_number, head_sha=run.head_sha
     )
@@ -2068,7 +2098,11 @@ def post_verdict(input: StamphogReviewInput) -> dict:
 
     _capture_review_timings(run, str(parsed.verdict), int((time.monotonic() - post_started) * 1000))
     activity.logger.info(f"Posted verdict {parsed.verdict} for run {run.id}")
-    return {"verdict": str(parsed.verdict), "waited_on_external_review": _waited_on_external_review(run)}
+    # The key keeps its name because recorded workflow histories carry it.
+    return {
+        "verdict": str(parsed.verdict),
+        "waited_on_external_review": _waited_on_external_review(run) or bool(pending_attestation_checks(run)),
+    }
 
 
 def _notify_finished_review(
@@ -2630,12 +2664,12 @@ _PATH_DENY_GATES = frozenset({"deny-list", "tier"})
 def _only_a_human_can_approve(parsed: ReviewerVerdict) -> bool:
     """True when the changed paths alone refused the PR, so a re-review of the same files refuses again.
 
-    A deny on migrations alone is excluded: it lifts once the `Migration risk` check passes.
+    A deny that an attestation could lift is excluded: it clears once that CI result passes.
     """
     gates = [g for g in parsed.gate_result.get("gates") or [] if isinstance(g, dict)]
     failed = {g.get("gate") for g in gates if not g.get("passed", True)}
-    deny_categories = (parsed.gate_result.get("classification") or {}).get("deny_categories") or []
-    return bool(failed) and failed <= _PATH_DENY_GATES and deny_categories != ["migrations"]
+    classification = parsed.gate_result.get("classification") or {}
+    return bool(failed) and failed <= _PATH_DENY_GATES and not classification.get("attestations_could_clear_deny")
 
 
 def _verdict_body(parsed: ReviewerVerdict, verdict: str, relabel_label: str | None) -> str:

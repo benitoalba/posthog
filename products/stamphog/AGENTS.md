@@ -274,8 +274,8 @@ Test clone changes with `GIT_NO_LAZY_FETCH=1`, because a public repository hides
 
 The server's pre-check (`refuse_on_pre_gates`, `backend/logic/engine_pregate.py`) runs `review_local.py --pregate` in a child process on the worker, in a temporary tree with the run's effective trusted policy and the PR head's `AGENT_APPROVALS.md` files.
 It never imports the engine: the engine's bare module names and its import-time policy load would bind to the worker's own checkout.
-Its fast verdict (a gate refusal, or the pending-migration WAIT) may only be one the sandbox review would also reach, because nothing re-reviews it.
-Every input the sandbox reads from its checkout must reach the tree too, or finality must not depend on it: the folder files decide the size gate, and the manifest scripts scan still needs git, so a dependency manifest keeps the pending-migration case undecided.
+Its fast verdict (a gate refusal, or the pending-attestation WAIT) may only be one the sandbox review would also reach, because nothing re-reviews it.
+Every input the sandbox reads from its checkout must reach the tree too, or finality must not depend on it: the folder files decide the size gate, and the manifest scripts scan still needs git, so a dependency manifest keeps the pending-attestation case undecided.
 `pregate()` decides that finality in the engine, and the server adds the file-list guards in `pregate_skip_reason` (head moved, list truncated, renames).
 Anything in doubt, and any error, falls through to the full review.
 
@@ -288,11 +288,20 @@ Every input the worker cannot confirm fails the check: a file list GitHub may ha
 A retry of `post_verdict` reuses the stored answer, because a second check that attests would post an approval over a delivered escalation.
 A new path to an approval must go through this check too.
 
-A pending `Migration risk` check returns WAIT rather than falling through to a refusal, because a
-refusal costs a trigger-label strip, and a ReviewHog handoff on a self-driving PR, over what is a
-race with CI. It can't reuse `Pipeline._only_pending_migration_check`: that method disqualifies on
-any failing gate other than the deny-list, and a migrations deny always drags the tier gate to
-T2-never with it, so it answers False for every PR it exists to catch.
+## Attestations (CI results that lift a deny)
+
+An attestation is a policy entry (`attestations` in the default-branch `.stamphog/policy.yml`, merged onto the shipped default) naming a CI result, the deny categories it may lift, and `paths`, the files it judges.
+A passing result lifts those categories only for the files it lists itself, intersected with `paths`, and only those categories: the file still denies every other one.
+Stamphog knows no ecosystem, tool or bot. What a passing result proves is the publisher's concern, so a new kind of proof is a new CI job and a policy entry, never engine code.
+`Migration risk` is the shipped default entry, pinned to the App that publishes it: a same-repo PR's workflow can create a check run of any name.
+
+- `stamphog_policy` is never liftable; the policy loader refuses such an entry. The files that prove an attestation (its workflow and the scripts it runs) belong in `stamphog_policy` too, because a `pull_request` run uses the PR's own copy of them.
+- Trust the run, not the name. A check entry reads the head commit's check runs, which GitHub binds to that commit, and may pin the publishing App (`app`). An Actions entry is found by the server (`logic/attestations.py`), because the sandbox holds no token: the declared workflow path, a `pull_request` event, this head sha and this PR, and the named job of the run's latest attempt. A skipped job counts for nothing.
+- The job lists its files in a notice annotation titled `stamphog attestation: <base ref>`, because the API exposes no job summary and a run's `pull_requests` field reflects the PR now, not when it ran. A proof for another base lifts nothing. A result with more than one marker lifts nothing either, check summaries included: a job that prints PR content can emit a workflow command, and a publisher's report can quote PR content.
+- A PR that changes a file in `paths` waits for a result that has not reported (a WAIT, not a refusal, because a refusal strips the trigger label over a race with CI). The workflow's trigger must cover `paths`, or such a PR waits forever. A result that reported and lifted nothing leaves the deny standing.
+- The WAIT records `pending_attestations` in the classification. A `check_run` delivery whose name matches one re-runs that review through `request_rereview_on_check_completed`, the same path as an external review's nudge. It filters inside the webhook request with one bounded, index-walking read keyed by the installation, because every check run in an installed repo arrives there. It reads the check's status rather than the action, because a check created already completed may arrive as `created` alone. That delivery finds no WAIT while the run is still in flight, so `rereview_after_external_review_finished` reads the head's check runs once more after the WAIT is saved.
+- The hosted App needs Actions read (the run lookup) and the `check_run` event (the wake-up). Without Actions read the lookup answers 403, and an Actions attestation lifts nothing and waits for nothing. Without the event a WAIT re-runs only on the next push.
+- `_blocked_only_by_pending_attestations` cannot reuse `Pipeline._only_pending_attestations`: a deny always drags the tier gate to T2-never with it, so that method answers False for every PR it exists to catch.
 
 ## Temporal specifics
 
