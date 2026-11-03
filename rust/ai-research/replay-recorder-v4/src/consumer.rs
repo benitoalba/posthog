@@ -1009,8 +1009,9 @@ mod tests {
                 stats: BlockStats::default(),
                 moments: Vec::new(),
                 image_urls: Vec::new(),
+                font_urls: Vec::new(),
                 assets: Vec::new(),
-                too_many_asset_slots: false,
+                unstorable: None,
                 visited_urls: Vec::new(),
                 captured_at_ms: None,
             })

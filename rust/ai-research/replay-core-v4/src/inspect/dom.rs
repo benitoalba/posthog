@@ -8,11 +8,12 @@ use std::sync::Arc;
 use url::Url;
 
 use crate::bytescan::{self as scan, Span};
+use crate::fonts::is_fetched_font_url;
 use crate::url_policy::{is_fetched_image_type, is_remote, MAX_URL_LEN};
 
 use super::assets::MAX_BLOCK_ASSET_SLOTS;
-use super::assets::{AssetContext, Buffer};
-use super::css::{self, CssKind};
+use super::assets::{AssetContext, Buffer, Unstorable};
+use super::css::{self, CssAssetKind, CssKind};
 use super::events::{field, field_copies, fields, number, text};
 use super::rrweb::{
     ADOPTED_STYLE_SHEET, FULL_SNAPSHOT, INCREMENTAL_SNAPSHOT, MUTATION, STYLE_DECLARATION,
@@ -28,6 +29,8 @@ use crate::scan::tokens::{Token, Tokens};
 pub const MAX_TRACKED_NODES: usize = 200_000;
 /// Remote image URLs kept per message, as the v3 collector caps URLs per message.
 pub const MAX_IMAGE_URLS: usize = 512;
+/// Font files queued for the fetcher per message, as many as image URLs.
+pub const MAX_FONT_URLS: usize = 512;
 /// Windows tracked per session. A new window past this evicts the window used least recently.
 pub const MAX_WINDOWS: usize = 16;
 /// Evicted windows remembered, so that one that comes back is known to have lost its DOM.
@@ -193,6 +196,14 @@ pub type Slot = (Buffer, Span, AssetContext);
 struct Urls {
     urls: Vec<String>,
     in_message: HashSet<String>,
+    /// Boxed, because the session state counts this struct's size and most messages queue no font file.
+    fonts: Option<Box<FontQueue>>,
+}
+
+#[derive(Default)]
+struct FontQueue {
+    urls: Vec<String>,
+    in_message: HashSet<String>,
 }
 
 /// The URL as the fetcher takes it: remote, and no longer than v3 fetches. An inline image is moved out of the block
@@ -211,10 +222,24 @@ impl Urls {
         }
     }
 
+    fn queue_font(&mut self, url: &str) {
+        let Some(url) = fetchable(url).filter(|url| is_fetched_font_url(url)) else {
+            return;
+        };
+        let fonts = self.fonts.get_or_insert_with(Box::default);
+        if fonts.in_message.len() < MAX_FONT_URLS && !fonts.in_message.contains(url) {
+            fonts.in_message.insert(url.to_owned());
+            fonts.urls.push(url.to_owned());
+        }
+    }
+
     /// Takes the URLs one walk found.
     fn merge(&mut self, walk: Urls) {
         for url in &walk.urls {
             self.push(url);
+        }
+        for url in walk.fonts.iter().flat_map(|fonts| &fonts.urls) {
+            self.queue_font(url);
         }
     }
 }
@@ -232,7 +257,7 @@ pub struct DomInspector {
     urls: Urls,
     slots: Vec<Slot>,
     slot_room: SlotRoom,
-    over_slot_room: bool,
+    unstorable: Option<Unstorable>,
 }
 
 /// The slots the events of the current block may still record.
@@ -260,9 +285,9 @@ struct Walk {
     buffer: Buffer,
     page_base: Option<Arc<Url>>,
     slots: Vec<Slot>,
-    /// The slots the block still has room for, and whether the walk found more.
+    /// The slots the block still has room for, and why the walk found its block unstorable.
     slot_room: usize,
-    over_slot_room: bool,
+    unstorable: Option<Unstorable>,
     /// Each node and its parent. A root's parent is `None`.
     ids: Vec<(i64, Option<i64>)>,
     /// The walk met more nodes than the node cap, so `ids` stops short.
@@ -305,7 +330,7 @@ impl Walk {
         if self.slots.len() < self.slot_room {
             self.slots.push((self.buffer, span, context));
         } else {
-            self.over_slot_room = true;
+            self.unstorable = self.unstorable.or(Some(Unstorable::TooManyAssetSlots));
         }
     }
 
@@ -363,12 +388,18 @@ impl Walk {
             return;
         };
         let page_base = self.page_base.clone();
-        let image_urls = &mut self.image_urls;
-        css::css_image_urls(&css, kind, page_base.as_deref(), &mut |image| {
-            if image.shown {
-                image_urls.push(image.url);
-            }
+        let urls = &mut self.image_urls;
+        let whole = css::css_asset_urls(&css, kind, page_base.as_deref(), &mut |asset| match asset
+            .kind
+        {
+            _ if !asset.shown => {}
+            CssAssetKind::Image => urls.push(asset.url),
+            CssAssetKind::Font { bundled: None } => urls.queue_font(asset.url),
+            CssAssetKind::Font { bundled: Some(_) } => {}
         });
+        if !whole {
+            self.unstorable = self.unstorable.or(Some(Unstorable::NestedTooDeep));
+        }
         self.push_slot(span, AssetContext::Css { kind, page_base });
     }
 }
@@ -896,7 +927,7 @@ enum Snapshot {
     /// block stores it, so the asset slots found before the walk stopped still count.
     Unreadable {
         slots: Vec<Slot>,
-        over_slot_room: bool,
+        unstorable: Option<Unstorable>,
     },
     Walked(Box<Walk>),
 }
@@ -911,7 +942,7 @@ fn walk_snapshot(
 ) -> Snapshot {
     let unreadable = || Snapshot::Unreadable {
         slots: Vec::new(),
-        over_slot_room: false,
+        unstorable: None,
     };
     let (bytes, root, buffer) = if scan::is_string(inner, data) {
         match expansion.json(data) {
@@ -940,7 +971,7 @@ fn walk_snapshot(
     } else {
         Snapshot::Unreadable {
             slots: walk.slots,
-            over_slot_room: walk.over_slot_room,
+            unstorable: walk.unstorable,
         }
     }
 }
@@ -1143,12 +1174,23 @@ impl DomInspector {
     /// Starts a message: the image URL cap counts per message.
     pub fn start_message(&mut self) {
         self.urls.in_message.clear();
+        if let Some(fonts) = &mut self.urls.fonts {
+            fonts.in_message.clear();
+        }
     }
 
     /// Ends a message. The URLs it saw go, so that they do not stay in memory that [`Self::retained_bytes`] does not
     /// count.
     pub fn finish_message(&mut self) {
         self.urls.in_message = HashSet::new();
+        if self
+            .urls
+            .fonts
+            .as_ref()
+            .is_some_and(|fonts| fonts.urls.is_empty())
+        {
+            self.urls.fonts = None;
+        }
     }
 
     /// Updates the window's DOM with one event and adds what it found to the block.
@@ -1207,16 +1249,16 @@ impl DomInspector {
                         stats.shadow_roots += walk.shadow_roots;
                         self.urls.merge(std::mem::take(&mut walk.image_urls));
                         self.slots.append(&mut walk.slots);
-                        self.over_slot_room |= walk.over_slot_room;
+                        self.unstorable = self.unstorable.or(walk.unstorable);
                         self.seen_snapshot = true;
                         observed.full_snapshot = true;
                     }
                     Snapshot::Unreadable {
                         mut slots,
-                        over_slot_room,
+                        unstorable,
                     } => {
                         self.slots.append(&mut slots);
-                        self.over_slot_room |= over_slot_room;
+                        self.unstorable = self.unstorable.or(unstorable);
                         stats.decode_failures += 1;
                         *dom = WindowDom {
                             unverifiable: true,
@@ -1241,7 +1283,7 @@ impl DomInspector {
                         observe_mutation(inner, data, &expansion, dom, &mut walk);
                     self.urls.merge(walk.image_urls);
                     self.slots.append(&mut walk.slots);
-                    self.over_slot_room |= walk.over_slot_room;
+                    self.unstorable = self.unstorable.or(walk.unstorable);
                     stats.orphan_mutations += orphans;
                     stats.decode_failures += u32::from(undecoded);
                     observed.changed = changed;
@@ -1264,7 +1306,7 @@ impl DomInspector {
                     style_sheet_assets(inner, data, event.source, &expansion, &mut walk);
                     self.urls.merge(walk.image_urls);
                     self.slots.append(&mut walk.slots);
-                    self.over_slot_room |= walk.over_slot_room;
+                    self.unstorable = self.unstorable.or(walk.unstorable);
                 }
             }
             _ => {}
@@ -1291,9 +1333,18 @@ impl DomInspector {
         self.slot_room = SlotRoom(room);
     }
 
-    /// Whether an event since the last call held more slots than the room, so its block must not be stored.
-    pub fn take_slot_overflow(&mut self) -> bool {
-        std::mem::take(&mut self.over_slot_room)
+    /// Why an event since the last call makes its block unstorable.
+    pub fn take_unstorable(&mut self) -> Option<Unstorable> {
+        self.unstorable.take()
+    }
+
+    /// The font files the events since the last call referenced, for the fetcher.
+    pub fn take_font_urls(&mut self) -> Vec<String> {
+        self.urls
+            .fonts
+            .as_mut()
+            .map(|fonts| std::mem::take(&mut fonts.urls))
+            .unwrap_or_default()
     }
 
     /// Whether a full snapshot of any window of the session decoded in this process.
@@ -2066,6 +2117,51 @@ mod tests {
     }
 
     #[test]
+    fn names_font_face_urls_and_fetches_only_unbundled_loadable_ones() {
+        let font = |name: &str| format!("https://fonts.example.com/{name}");
+        let face =
+            |family: &str, src: &str| format!("@font-face{{font-family:{family};src:{src}}}");
+        let style = [
+            face(
+                "'Brand Sans'",
+                &format!(
+                    "url({}) format('woff2'),url({}) format('embedded-opentype')",
+                    font("brand.woff2"),
+                    font("brand.eot?#iefix")
+                ),
+            ),
+            face(
+                "\"Open Sans\"",
+                &format!("url({})", font("open-sans.woff2")),
+            ),
+            face("Inter", &format!("url({})", font("shared.woff2"))),
+            face("Brand Inter", &format!("url({})", font("shared.woff2"))),
+            format!(".logo{{background:url({})}}", font("logo.png")),
+            face("Logo", &format!("url({})", font("logo.png"))),
+            face("Brand Serif", "url(/fonts/serif.woff2)"),
+            face("Roboto", "url(/fonts/roboto.woff2)"),
+        ]
+        .concat();
+        let snapshot = json!({"node": {"type": 0, "childNodes": [element(2, "html", json!({}), json!([
+            element(3, "style", json!({}), json!([{"type": 3, "textContent": style, "id": 4}])),
+        ]))], "id": 1}});
+        let message = events(json!([
+            {"type": 2, "timestamp": 1, "data": snapshot},
+            {"type": 3, "timestamp": 2, "data": {"source": 8, "id": 3, "adds": [{"rule": face("Icons", &format!("url({})", font("icons.woff"))), "index": 0}]}},
+        ]));
+        let (mut dom, _) = observe_all(&message, "w");
+        let mut fetched = dom.take_font_urls();
+        fetched.sort();
+        let mut expected = ["brand.woff2", "icons.woff", "logo.png", "shared.woff2"]
+            .map(font)
+            .to_vec();
+        expected.insert(0, "https://app.example.com/fonts/serif.woff2".to_owned());
+        assert_eq!(fetched, expected);
+        // The style text and the rule are one CSS slot each, which the writer reads as the inspector did.
+        assert_eq!(slot_texts(&message, "w").len(), 2);
+    }
+
+    #[test]
     fn keeps_one_srcset_candidate_of_a_hidden_img() {
         let srcset = |count: usize| {
             (0..count)
@@ -2110,11 +2206,8 @@ mod tests {
             limited.observe(&message.inner, event, "w", None, &mut stats);
         }
         assert_eq!(
-            (
-                limited.take_asset_slots().len(),
-                limited.take_slot_overflow()
-            ),
-            (adds.len() - 1, true)
+            (limited.take_asset_slots().len(), limited.take_unstorable()),
+            (adds.len() - 1, Some(Unstorable::TooManyAssetSlots))
         );
         assert_eq!(
             found[..2],

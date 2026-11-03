@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::assets::{AssetSlot, MAX_BLOCK_ASSET_SLOTS};
+use super::assets::{AssetSlot, Unstorable, MAX_BLOCK_ASSET_SLOTS};
 use super::clicks::{ClickKind, ClickTracker};
 use super::dom::DomInspector;
 use super::events::{href_from, number, Activity, DataFields, EventCounter};
@@ -53,7 +53,8 @@ pub struct BlockInspection {
     image_urls: Vec<String>,
     assets: Vec<Vec<AssetSlot>>,
     asset_slots: usize,
-    too_many_asset_slots: bool,
+    unstorable: Option<Unstorable>,
+    font_urls: Vec<String>,
     events: u32,
 }
 
@@ -67,9 +68,10 @@ pub struct Inspected {
     pub image_urls: Vec<String>,
     /// The asset slots of each message, which the writer replaces in place.
     pub assets: Vec<Vec<AssetSlot>>,
-    /// The block holds more than [`MAX_BLOCK_ASSET_SLOTS`] slots, so `assets` stops short and the block must not be
-    /// stored.
-    pub too_many_asset_slots: bool,
+    /// Set when the block can hold an asset URL that has no slot, so that the block must not be stored.
+    pub unstorable: Option<Unstorable>,
+    /// Font files the block's CSS referenced, for the fetcher.
+    pub font_urls: Vec<String>,
 }
 
 impl BlockInspection {
@@ -83,7 +85,8 @@ impl BlockInspection {
             moments: self.moments,
             image_urls: self.image_urls,
             assets: self.assets,
-            too_many_asset_slots: self.too_many_asset_slots,
+            unstorable: self.unstorable,
+            font_urls: self.font_urls,
         }
     }
 }
@@ -192,7 +195,8 @@ impl SessionInspector {
                 context,
             });
         }
-        block.too_many_asset_slots |= self.dom.take_slot_overflow();
+        block.unstorable = block.unstorable.or(self.dom.take_unstorable());
+        block.font_urls.extend(self.dom.take_font_urls());
         if observed.full_snapshot {
             self.cold = false;
         }

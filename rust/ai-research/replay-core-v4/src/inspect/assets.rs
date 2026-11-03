@@ -15,6 +15,25 @@ use crate::url_policy::is_remote;
 /// hold. The writer drops a block that has more.
 pub const MAX_BLOCK_ASSET_SLOTS: usize = 1_000_000;
 
+/// Why a block must not be stored: it can hold an asset URL that has no slot, which the writer would not replace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unstorable {
+    /// More slots than [`MAX_BLOCK_ASSET_SLOTS`].
+    TooManyAssetSlots,
+    /// CSS that nests past the depth `cssparser` reads.
+    NestedTooDeep,
+}
+
+impl Unstorable {
+    /// The outcome of the dropped block in the recorder's metrics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Unstorable::TooManyAssetSlots => "too_many_asset_slots",
+            Unstorable::NestedTooDeep => "too_many_nested_blocks",
+        }
+    }
+}
+
 /// The bytes a slot's span indexes: the message's inner JSON, or the decoded JSON of the event's compressed string that
 /// sits at this span of the inner JSON.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use futures::stream::{self, StreamExt};
 use metrics::counter;
 use replay_core_v4::compression::{GZIP_MAGIC, MAX_DECOMPRESSED_BYTES};
-use replay_core_v4::inspect::assets::AssetSlot;
+use replay_core_v4::inspect::assets::{AssetSlot, Unstorable};
 use replay_core_v4::inspect::session::{BlockInspection, Moment, SessionInspector};
 use replay_core_v4::inspect::stats::BlockStats;
 use replay_core_v4::scan::cv::{Expansion, MESSAGE_DECODE_BUDGET};
@@ -96,10 +96,12 @@ pub struct Block {
     pub moments: Vec<Moment>,
     /// Remote image URLs the block's DOM referenced.
     pub image_urls: Vec<String>,
+    /// Font files the block's CSS referenced.
+    pub font_urls: Vec<String>,
     /// Where each message's asset URLs sit, which the writer replaces in place.
     pub assets: Vec<Vec<AssetSlot>>,
-    /// The block holds more asset slots than the inspector keeps, so the block must not be stored.
-    pub too_many_asset_slots: bool,
+    /// Set when the block can hold an asset URL that has no slot, so that the block must not be stored.
+    pub unstorable: Option<Unstorable>,
     /// The distinct pages of the block's surfacing features, which the writer stores as fingerprints.
     pub visited_urls: Vec<String>,
     /// The earliest Kafka timestamp of the block's messages, for the capture watermark of the index topic.
@@ -516,8 +518,9 @@ fn inspect_session(
                 stats: inspected.stats,
                 moments: inspected.moments,
                 image_urls: inspected.image_urls,
+                font_urls: inspected.font_urls,
                 assets: inspected.assets,
-                too_many_asset_slots: inspected.too_many_asset_slots,
+                unstorable: inspected.unstorable,
                 visited_urls: inspected.features.visited_urls,
                 captured_at_ms,
             }
