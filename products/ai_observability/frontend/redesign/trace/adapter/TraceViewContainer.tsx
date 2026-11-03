@@ -1,11 +1,14 @@
-import { useActions, useValues } from 'kea'
+import { useActions, useMountedLogic, useValues } from 'kea'
 import { memo } from 'react'
 
 import { SaveToDatasetButton } from '../../../datasets/SaveToDatasetButton'
 import { TraceView, TraceViewProps, TraceViewReadyProps } from '../components/TraceView'
 import { traceExportLogic } from '../traceExportLogic'
+import { traceReviewLogic, traceReviewLogicValues } from '../traceReviewLogic'
 import { traceViewModelLogic, traceViewModelLogicValues } from '../traceViewModelLogic'
 import { FeedbackEntry, LabeledLink, MatchDirection, NodeDetailTab, SummaryItemKind, TraceMode } from '../types'
+import { TraceReviewActions } from './TraceReviewActions'
+import { traceReviewBridgeLogic } from './traceReviewBridgeLogic'
 
 export interface TraceViewContainerProps {
     hostId: string
@@ -44,7 +47,15 @@ type ReadyValues = Pick<
     | 'feedbackCountByNodeId'
     | 'feedbackMode'
     | 'selectedStepFeedback'
-> & { traceExportLoading: boolean; backLink: LabeledLink | null }
+> &
+    Pick<
+        traceReviewLogicValues,
+        'reviewStatus' | 'reviewStatusLoading' | 'reviewStatusFailed' | 'queueHref' | 'removeFromQueueLoading'
+    > & {
+        traceId: string
+        traceExportLoading: boolean
+        backLink: LabeledLink | null
+    }
 
 interface ReadyActions {
     setMode: (mode: TraceMode) => void
@@ -63,6 +74,8 @@ interface ReadyActions {
     summaryStepClicked: (nodeId: string, kind: SummaryItemKind) => void
     showFeedback: (nodeId: string | null, entry: FeedbackEntry) => void
     retryTraceFeedback: () => void
+    loadReviewStatus: () => void
+    removeFromQueue: () => void
 }
 
 function toReadyProps(values: ReadyValues, actions: ReadyActions): TraceViewReadyProps | null {
@@ -74,6 +87,17 @@ function toReadyProps(values: ReadyValues, actions: ReadyActions): TraceViewRead
             ...values.header,
             backLink: values.backLink,
             exportAction: { loading: values.traceExportLoading, onExport: actions.exportTrace },
+            actions: (
+                <TraceReviewActions
+                    traceId={values.traceId}
+                    status={values.reviewStatus}
+                    loading={values.reviewStatusLoading}
+                    failed={values.reviewStatusFailed}
+                    removing={values.removeFromQueueLoading}
+                    onQueueChanged={actions.loadReviewStatus}
+                    onRemoveFromQueue={actions.removeFromQueue}
+                />
+            ),
         },
         summary: {
             ...values.summary,
@@ -83,6 +107,7 @@ function toReadyProps(values: ReadyValues, actions: ReadyActions): TraceViewRead
                 ? { chip: values.feedbackChip, onClick: () => actions.showFeedback(null, 'chip') }
                 : null,
             git: values.gitBranch,
+            review: values.reviewStatus ? { status: values.reviewStatus, queueHref: values.queueHref } : null,
         },
         mode: values.mode,
         onModeChange: actions.setMode,
@@ -174,6 +199,11 @@ export const TraceViewContainer = memo(function TraceViewContainer({
     const exportLogic = traceExportLogic({ traceId, timestampHint })
     const { traceExportLoading } = useValues(exportLogic)
     const { exportTrace } = useActions(exportLogic)
+    const reviewLogic = traceReviewLogic({ traceId })
+    const { reviewStatus, reviewStatusLoading, reviewStatusFailed, queueHref, removeFromQueueLoading } =
+        useValues(reviewLogic)
+    const { loadReviewStatus, removeFromQueue } = useActions(reviewLogic)
+    useMountedLogic(traceReviewBridgeLogic({ traceId }))
 
     const readyProps =
         status === 'ready'
@@ -209,8 +239,14 @@ export const TraceViewContainer = memo(function TraceViewContainer({
                       selectedStepFeedback,
                       traceExportLoading,
                       backLink,
+                      traceId,
+                      reviewStatus,
+                      reviewStatusLoading,
+                      reviewStatusFailed,
+                      queueHref,
+                      removeFromQueueLoading,
                   },
-                  { ...actions, exportTrace }
+                  { ...actions, exportTrace, loadReviewStatus, removeFromQueue }
               )
             : null
 

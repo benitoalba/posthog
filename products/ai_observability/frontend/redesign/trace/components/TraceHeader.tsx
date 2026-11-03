@@ -1,3 +1,5 @@
+import { ReactNode } from 'react'
+
 import { IconArrowLeft } from '@posthog/icons'
 import { LemonButton } from '@posthog/lemon-ui'
 
@@ -12,9 +14,17 @@ export interface TraceHeaderProps {
     backLink: LabeledLink | null
     search?: TraceSearchBoxProps | null
     exportAction?: TraceExportButtonProps
+    actions?: ReactNode
 }
 
-export function TraceHeader({ name, hasError, backLink, search = null, exportAction }: TraceHeaderProps): JSX.Element {
+export function TraceHeader({
+    name,
+    hasError,
+    backLink,
+    search = null,
+    exportAction,
+    actions = null,
+}: TraceHeaderProps): JSX.Element {
     return (
         <header className="flex flex-wrap items-center gap-2">
             {backLink ? (
@@ -31,6 +41,7 @@ export function TraceHeader({ name, hasError, backLink, search = null, exportAct
             <TraceStatusBadge hasError={hasError} />
             <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
                 {search ? <TraceSearchBox {...search} /> : null}
+                {actions}
                 {exportAction ? <TraceExportButton {...exportAction} /> : null}
             </div>
         </header>
