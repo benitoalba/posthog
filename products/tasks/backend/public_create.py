@@ -3,6 +3,8 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
+from rest_framework.fields import BooleanField
+
 from posthog.dataclasses import frozen
 
 from products.tasks.backend.facade.profiles import Repository, TaskRunOptions
@@ -77,3 +79,8 @@ def idempotent_request(user_id: int | None, data: Any) -> IdempotentRequest | No
     if not isinstance(key, str) or not key.strip():
         return None
     return IdempotentRequest(key=public_idempotency_key(user_id, key.strip()), fingerprint=request_fingerprint(data))
+
+
+def asks_for_run(data: Mapping[str, Any]) -> bool:
+    value = data.get("start_run")
+    return isinstance(value, bool | int | str) and value in BooleanField.TRUE_VALUES

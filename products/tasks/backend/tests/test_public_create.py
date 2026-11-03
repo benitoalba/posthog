@@ -7,6 +7,7 @@ from parameterized import parameterized
 from products.tasks.backend.facade.run_config import REASONING_EFFORTS
 from products.tasks.backend.presentation.serializers import PublicReasoningEffort, TaskRunOptionsRequestSerializer
 from products.tasks.backend.public_create import (
+    asks_for_run,
     create_fields_from_options,
     idempotent_request,
     options_from_request,
@@ -166,3 +167,19 @@ class TestPublicCreateIdempotency(SimpleTestCase):
         if replay_request is not None:
             self.assertEqual(replay_request.key, public_idempotency_key(1, "k"))
             self.assertEqual(replay_request.fingerprint, request_fingerprint(data))
+
+    @parameterized.expand(
+        [
+            ("true", {"start_run": True}, True),
+            ("text_true", {"start_run": "true"}, True),
+            ("number_one", {"start_run": 1}, True),
+            ("false", {"start_run": False}, False),
+            ("text_false", {"start_run": "false"}, False),
+            ("omitted", {}, False),
+            ("list", {"start_run": [True]}, False),
+        ]
+    )
+    def test_a_request_asks_for_a_run_the_way_the_serializer_reads_start_run(
+        self, _name: str, data: dict[str, Any], asks: bool
+    ) -> None:
+        self.assertEqual(asks_for_run(data), asks)

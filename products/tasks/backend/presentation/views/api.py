@@ -240,7 +240,7 @@ from products.tasks.backend.presentation.serializers import (
 )
 from products.tasks.backend.presentation.task_review_serializers import TaskReviewQuerySerializer, TaskReviewSerializer
 from products.tasks.backend.presentation.views.artifact_preview import create_artifact_preview_url
-from products.tasks.backend.public_create import idempotent_request, uses_public_create
+from products.tasks.backend.public_create import asks_for_run, idempotent_request, uses_public_create
 
 from ee.hogai.utils.aio import async_to_sync
 
@@ -803,7 +803,7 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         responses={
             200: OpenApiResponse(
                 response=TaskCreateResponseSerializer,
-                description="The request repeated an idempotency key with the same body. This is the task the first request created.",
+                description="The request repeated an idempotency key with the same body. This is the task the first request created. If that request asked for a run that never started, this one starts it.",
             ),
             201: TaskCreateResponseSerializer,
             409: OpenApiResponse(
@@ -847,8 +847,17 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         },
     )
     def create(self, request, **kwargs):
-        if (replay_response := self._replay_before_validation(request)) is not None:
-            return replay_response
+        replay_request = idempotent_request(self._user_id(), request.data)
+        replayed: tasks_contracts.TaskDetailDTO | None = None
+        if replay_request is not None:
+            try:
+                replayed = tasks_facade.find_task_for_idempotency_key(
+                    self.team_id, self._user_id(), replay_request.key, replay_request.fingerprint
+                )
+            except tasks_facade.IdempotencyKeyReused:
+                return self._idempotency_key_reused_response()
+            if replayed is not None and not (replayed.latest_run is None and asks_for_run(request.data)):
+                return Response(TaskSerializer(replayed).data)
         serializer = self._write_serializer(request.data, serializer_class=TaskCreateSerializer)
         validated_data = dict(serializer.validated_data)
         validated_data["state"] = {"created_on_mobile": request.headers.get("X-PostHog-Client-Platform") == "mobile"}
@@ -935,13 +944,19 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         try:
             run_error = None
             if start_run:
-                create_result = tasks_facade.create_task_and_run(
-                    self.team_id,
-                    self._user_id(),
-                    validated_data=validated_data,
-                    run_data=run_data,
-                    client_provenance=get_task_client_provenance(request),
-                    code_access_allowed=code_access_allowed,
+                create_result = (
+                    tasks_facade.start_missing_first_run(
+                        self.team_id, self._user_id(), task=replayed, run_data=run_data
+                    )
+                    if replayed is not None
+                    else tasks_facade.create_task_and_run(
+                        self.team_id,
+                        self._user_id(),
+                        validated_data=validated_data,
+                        run_data=run_data,
+                        client_provenance=get_task_client_provenance(request),
+                        code_access_allowed=code_access_allowed,
+                    )
                 )
                 if create_result.error is not None:
                     return self._task_error_response(create_result.error)
@@ -989,28 +1004,25 @@ class TaskViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         response_data = TaskSerializer(task).data
         if run_error:
             response_data["run_error"] = run_error
-        return Response(response_data, status=status.HTTP_201_CREATED)
+        return Response(response_data, status=status.HTTP_200_OK if replayed is not None else status.HTTP_201_CREATED)
 
-    def _replay_before_validation(self, request: Request) -> Response | None:
-        replay_request = idempotent_request(self._user_id(), request.data)
-        if replay_request is None:
-            return None
-        return self._idempotent_replay_response(replay_request.key, replay_request.fingerprint)
+    def _idempotency_key_reused_response(self) -> Response:
+        return Response(
+            TaskRunErrorResponseSerializer(
+                {
+                    "type": "idempotency_error",
+                    "code": "idempotency_key_reused",
+                    "error": "This idempotency key was used for a different request.",
+                }
+            ).data,
+            status=status.HTTP_409_CONFLICT,
+        )
 
     def _idempotent_replay_response(self, key: str, fingerprint: str) -> Response | None:
         try:
             existing = tasks_facade.find_task_for_idempotency_key(self.team_id, self._user_id(), key, fingerprint)
         except tasks_facade.IdempotencyKeyReused:
-            return Response(
-                TaskRunErrorResponseSerializer(
-                    {
-                        "type": "idempotency_error",
-                        "code": "idempotency_key_reused",
-                        "error": "This idempotency key was used for a different request.",
-                    }
-                ).data,
-                status=status.HTTP_409_CONFLICT,
-            )
+            return self._idempotency_key_reused_response()
         return Response(TaskSerializer(existing).data) if existing is not None else None
 
     def _warm_activation_unavailable_response(self, error: tasks_facade.WarmRunActivationUnavailable) -> Response:

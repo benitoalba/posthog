@@ -420,6 +420,7 @@ __all__ = [
     "resolve_slack_thread_context",
     "resume_task_run_in_cloud",
     "run_task",
+    "start_missing_first_run",
     "send_cancel",
     "select_repository_for_message",
     "set_task_run_output",
@@ -7965,8 +7966,6 @@ def create_task_and_run(
     client_provenance: TaskClientProvenance | None = None,
     code_access_allowed: bool = False,
 ) -> contracts.TaskRunResult:
-    from products.signals.backend.facade.api import ReportTaskCapExceeded
-
     if custom_image_id := run_data.get("custom_image_id"):
         custom_image = SandboxCustomImage.get_accessible_for_task(
             image_id=custom_image_id, team_id=team_id, task_created_by_id=user_id
@@ -7999,8 +7998,24 @@ def create_task_and_run(
         client_provenance=client_provenance,
         code_access_allowed=code_access_allowed,
     )
+    return _start_first_run(
+        task, team_id, user_id, run_data=run_data, only_if_no_runs="idempotency_key" in validated_data
+    )
+
+
+def start_missing_first_run(
+    team_id: int, user_id: int | None, *, task: contracts.TaskDetailDTO, run_data: dict
+) -> contracts.TaskRunResult:
+    return _start_first_run(task, team_id, user_id, run_data=run_data, only_if_no_runs=True)
+
+
+def _start_first_run(
+    task: contracts.TaskDetailDTO, team_id: int, user_id: int | None, *, run_data: dict, only_if_no_runs: bool
+) -> contracts.TaskRunResult:
+    from products.signals.backend.facade.api import ReportTaskCapExceeded
+
     try:
-        result = run_task(task.id, team_id, user_id, validated_data=run_data)
+        result = run_task(task.id, team_id, user_id, validated_data=run_data, only_if_no_runs=only_if_no_runs)
         if result is None:
             return contracts.TaskRunResult(task=task, run_error="Failed to create task run.")
         return contracts.TaskRunResult(
@@ -9698,10 +9713,12 @@ def run_task(
     warm_retry_token: str | None = None,
     pipeline_rerun: bool = False,
     free_trial_enabled: bool | None = None,
+    only_if_no_runs: bool = False,
 ) -> contracts.TaskRunResult | None:
     """Return None for an inaccessible task, otherwise return its refreshed detail or a structured error.
 
     The caller applies the usage gate. Only server-requested Signals research may set pipeline_rerun.
+    With only_if_no_runs, the task lock is taken first and a task that already has a run starts no other.
     """
     from products.signals.backend.facade.report_tasks import (  # noqa: PLC0415 — cross-product read kept off the api import path
         enforce_report_implementation_rerun_cap,
@@ -10226,6 +10243,10 @@ def run_task(
         }
     try:
         with transaction.atomic():
+            if only_if_no_runs:
+                Task.objects.select_for_update(of=("self",)).get(id=task.id, team_id=task.team_id)
+                if task.runs.filter(team_id=task.team_id).exists():
+                    return contracts.TaskRunResult(task=get_task_detail(task.id, team_id, user_id))
             task_run = task.create_run(
                 mode=mode, branch=branch, extra_state=extra_state, acting_user_id=user_id, scheduled_at=scheduled_at
             )

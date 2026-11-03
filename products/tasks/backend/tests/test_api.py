@@ -7299,6 +7299,55 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
         self.assertEqual(first.json()["id"], second.json()["id"])
         self.assertEqual(Task.objects.get(id=first.json()["id"]).runs.count(), 1)
 
+    @patch("products.tasks.backend.presentation.views.api._is_internal_debug_team", return_value=True)
+    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
+    def test_repeating_a_create_whose_run_never_started_starts_the_run_once(
+        self, _mock_workflow, _mock_internal_team
+    ) -> None:
+        payload = {"profile": "test.public", "idempotency_key": "lost-run", "start_run": True}
+        with patch("products.tasks.backend.facade.api.run_task", side_effect=RuntimeError("worker died")):
+            first = self._create(**payload)
+        task = Task.objects.get(id=first.json()["id"])
+        runs_after_first = task.runs.count()
+
+        second = self._create(**payload)
+        third = self._create(**payload)
+
+        self.assertEqual(runs_after_first, 0)
+        self.assertEqual(
+            [response.status_code for response in (first, second, third)],
+            [status.HTTP_201_CREATED, status.HTTP_200_OK, status.HTTP_200_OK],
+        )
+        self.assertEqual({response.json()["id"] for response in (first, second, third)}, {str(task.id)})
+        self.assertEqual(task.runs.count(), 1)
+        self.assertEqual(second.json()["latest_run"]["id"], str(task.runs.get().id))
+
+    @parameterized.expand(
+        [
+            ("first_call", 0, 1),
+            ("repeated_call", 0, 2),
+            ("task_that_has_a_run", 1, 1),
+        ]
+    )
+    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
+    def test_starting_a_missing_first_run_never_adds_a_second_run(
+        self, _name: str, existing_runs: int, calls: int, _mock_workflow
+    ) -> None:
+        task = self.create_task(created_by=self.user)
+        for _ in range(existing_runs):
+            TaskRun.objects.create(task=task, team=self.team, status=TaskRun.Status.QUEUED)
+        detail = tasks_facade.get_task_detail(task.id, self.team.id, self.user.id)
+        assert detail is not None
+
+        for _ in range(calls):
+            result = tasks_facade.start_missing_first_run(
+                self.team.id, self.user.id, task=detail, run_data={"mode": "background"}
+            )
+
+        self.assertIsNone(result.error)
+        self.assertIsNone(result.run_error)
+        self.assertEqual(task.runs.count(), 1)
+
     def test_reusing_a_key_after_the_task_was_deleted_is_refused(self) -> None:
         first = self._create(profile="test.public", idempotency_key="retry-3")
         Task.objects.get(id=first.json()["id"]).soft_delete()
