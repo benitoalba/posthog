@@ -114,6 +114,7 @@ from products.tasks.backend.facade.profiles import (
     TaskProfile,
     TaskRunOptions,
     TaskSource,
+    find_task_profile,
     resolve_task_origin,
 )
 from products.tasks.backend.feature_flags import (
