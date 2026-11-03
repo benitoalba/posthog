@@ -37,6 +37,7 @@ BK_DISPLAY_TOOLS = frozenset({BK_SEARCH_TOOL, BK_WINDOW_TOOL, BK_REPO_SEARCH_TOO
 _RECOGNIZED_TOOLS = BK_DISPLAY_TOOLS | {DOCS_SEARCH_TOOL}
 # A follow-up run is a new process. These pins live on the previous run, not on the task.
 _RESUMED_RUN_STATE_KEYS = (
+    "mcp_exclude_tools",
     "config_snapshot",
     "model",
     "runtime_adapter",

@@ -168,6 +168,24 @@ class TestPlaygroundChatAPI(APIBaseTest):
         assert not Task.objects.filter(origin_product=Task.OriginProduct.BUSINESS_KNOWLEDGE).exists()
         assert PlaygroundTurn.objects.unscoped().count() == 0
 
+    def test_follow_up_keeps_hidden_tools_for_a_task_without_a_profile(self, _ff, _workflow) -> None:
+        chat = self._create_chat()
+        asked = self.client.post(f"{self.url}{chat['id']}/ask/", {"question": "Can I get a refund?"}, format="json")
+        assert asked.status_code == status.HTTP_201_CREATED, asked.content
+        first_turn = asked.json()["turns"][0]
+        Task.objects.filter(id=first_turn["task_id"]).update(profile=None)
+        first_run = TaskRun.objects.get(id=first_turn["run"]["run_id"])
+        first_run.status = TaskRun.Status.COMPLETED
+        first_run.output = {"reply": "Yes, within 30 days.", "sources": []}
+        first_run.state = {**first_run.state, "mcp_exclude_tools": ["project-get", "user-get"]}
+        first_run.save(update_fields=["status", "output", "state"])
+
+        follow_up = self.client.post(f"{self.url}{chat['id']}/ask/", {"question": "And after 30 days?"}, format="json")
+
+        assert follow_up.status_code == status.HTTP_201_CREATED, follow_up.content
+        successor = TaskRun.objects.get(id=follow_up.json()["turns"][1]["run"]["run_id"])
+        assert successor.state["mcp_exclude_tools"] == ["project-get", "user-get"]
+
     def test_follow_up_resumes_the_same_sandbox(self, _ff, _workflow) -> None:
         chat = self._create_chat()
         asked = self.client.post(f"{self.url}{chat['id']}/ask/", {"question": "Can I get a refund?"}, format="json")
