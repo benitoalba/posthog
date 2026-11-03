@@ -24,7 +24,18 @@ function location(properties: Record<string, any>): string | null {
 }
 
 export function TransactionalEmailPersonCard({ distinctId }: { distinctId: string }): JSX.Element {
-    const { person, personLoading } = useValues(transactionalEmailLogEntryLogic)
+    const { person, personLoading, personFailed } = useValues(transactionalEmailLogEntryLogic)
+
+    if (personFailed && !personLoading) {
+        return (
+            <div className="border rounded bg-surface-primary p-4 flex flex-col gap-2">
+                <h3 className="text-sm font-semibold m-0">Person</h3>
+                <p className="text-sm text-secondary m-0">
+                    This person couldn't load. Try again from the activity panel.
+                </p>
+            </div>
+        )
+    }
 
     if (person === undefined || personLoading) {
         return (

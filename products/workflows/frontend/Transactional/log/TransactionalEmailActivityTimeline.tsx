@@ -75,7 +75,9 @@ export function TransactionalEmailActivityTimeline({
                     >
                         {nothingAround
                             ? `No events from this person in the ${pluralize(ACTIVITY_WINDOW_DAYS, 'day')} before or after this email.`
-                            : 'No activity in your product since this email.'}
+                            : dayjs().isAfter(dayjs(sentAt).add(ACTIVITY_WINDOW_DAYS, 'day'))
+                              ? `No activity in your product in the ${pluralize(ACTIVITY_WINDOW_DAYS, 'day')} after this email.`
+                              : 'No activity in your product since this email.'}
                     </p>
                 )}
                 {activity.hasMoreAfter && (

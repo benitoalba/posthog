@@ -42,7 +42,7 @@ const STATUS_OPTIONS = (['delivered', 'sent', 'queued', 'bounced', 'complained',
 
 export function TransactionalEmailLog(): JSX.Element {
     const { emails, pageLoading, pageFailed, filters, isFiltered, pagination } = useValues(transactionalEmailLogLogic)
-    const { setFilters, setPage, loadEmails } = useActions(transactionalEmailLogLogic)
+    const { setFilters, setPage, refresh, loadEmails } = useActions(transactionalEmailLogLogic)
     const { transactionalTemplates } = useValues(messageTemplatesLogic)
 
     const emailOptions = transactionalTemplates
@@ -105,7 +105,7 @@ export function TransactionalEmailLog(): JSX.Element {
                         size="small"
                         icon={<IconRefresh />}
                         loading={pageLoading}
-                        onClick={() => loadEmails()}
+                        onClick={() => refresh()}
                         data-attr="transactional-email-log-refresh"
                     >
                         Refresh

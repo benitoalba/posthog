@@ -35,6 +35,7 @@ export interface transactionalEmailLogEntryLogicValues {
     otherEmails: TransactionalEmailLogEntryApi[]
     otherEmailsLoading: boolean
     person: ActivityPerson | null | undefined
+    personFailed: boolean
     personLoading: boolean
 }
 
@@ -147,6 +148,14 @@ export const transactionalEmailLogEntryLogic = kea<transactionalEmailLogEntryLog
     }),
     reducers({
         beforeExpanded: [false, { showAllBefore: () => true }],
+        personFailed: [
+            false,
+            {
+                loadPerson: () => false,
+                loadPersonSuccess: () => false,
+                loadPersonFailure: () => true,
+            },
+        ],
         activityFailed: [
             false,
             {

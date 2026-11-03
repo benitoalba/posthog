@@ -8,10 +8,10 @@ import { TransactionalEmailActivityTimeline } from './TransactionalEmailActivity
 import { transactionalEmailLogEntryLogic } from './transactionalEmailLogEntryLogic'
 
 export function TransactionalEmailActivity({ email }: { email: TransactionalEmailLogDetailApi }): JSX.Element {
-    const { person, personLoading, activity, activityLoading, activityFailed } = useValues(
+    const { person, personLoading, personFailed, activity, activityLoading, activityFailed } = useValues(
         transactionalEmailLogEntryLogic
     )
-    const { loadActivity } = useActions(transactionalEmailLogEntryLogic)
+    const { loadActivity, loadPerson } = useActions(transactionalEmailLogEntryLogic)
 
     const firstName = person?.properties?.name ? String(person.properties.name).split(' ')[0] : null
     const title = firstName ? `What ${firstName} did around this email` : 'Activity around this email'
@@ -23,6 +23,20 @@ export function TransactionalEmailActivity({ email }: { email: TransactionalEmai
                 This send has no person attached. Pass a <code>distinct_id</code> when you send, and the person's
                 activity before and after the email shows up here.
             </p>
+        )
+    } else if (personFailed && !personLoading) {
+        const distinctId = email.distinct_id
+        content = (
+            <LemonBanner
+                type="error"
+                action={{
+                    children: 'Try again',
+                    onClick: () => loadPerson(distinctId),
+                    'data-attr': 'transactional-email-person-retry',
+                }}
+            >
+                The person behind this send couldn't load. Check your connection and try again.
+            </LemonBanner>
         )
     } else if (person === null) {
         content = (
