@@ -214,7 +214,7 @@ export const transactionalEmailLogLogic = kea<transactionalEmailLogLogicType>([
             }
             return [router.values.location.pathname, searchParams, router.values.hashParams, { replace: true }]
         }
-        return { setFilters: toUrl, setPage: toUrl }
+        return { setFilters: toUrl, setPage: toUrl, refresh: toUrl }
     }),
     urlToAction(({ actions, values }) => ({
         '/transactional/log': (_, searchParams) => {

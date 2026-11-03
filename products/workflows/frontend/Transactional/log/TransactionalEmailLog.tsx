@@ -204,9 +204,11 @@ export function TransactionalEmailLog(): JSX.Element {
                 emptyState={
                     pageFailed
                         ? "The log couldn't load"
-                        : isFiltered
-                          ? 'No sends match these filters'
-                          : 'No transactional emails sent in this period. Sends from your code show up here within a few seconds.'
+                        : filters.page > 1
+                          ? 'No more sends past this page. Go back a page to see the rest.'
+                          : isFiltered
+                            ? 'No sends match these filters'
+                            : 'No transactional emails sent in this period. Sends from your code show up here within a few seconds.'
                 }
             />
         </div>
