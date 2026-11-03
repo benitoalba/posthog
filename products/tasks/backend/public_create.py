@@ -28,7 +28,7 @@ def options_from_request(data: Mapping[str, Any]) -> TaskRunOptions:
     )
 
 
-def create_fields_from_options(options: TaskRunOptions) -> dict[str, Any]:
+def create_fields_from_options(options: TaskRunOptions, *, repositories_given: bool = False) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     if options.runtime is not None:
         fields["runtime"] = options.runtime
@@ -42,6 +42,8 @@ def create_fields_from_options(options: TaskRunOptions) -> dict[str, Any]:
         fields["repositories"] = [repository.name for repository in options.repositories]
         if options.repositories[0].initial_branch:
             fields["branch"] = options.repositories[0].initial_branch
+    elif repositories_given:
+        fields["repositories"] = []
     if options.output_schema is not None:
         fields["json_schema"] = options.output_schema
     if options.permission_mode is not None:

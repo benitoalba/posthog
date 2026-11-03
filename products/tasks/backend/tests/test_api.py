@@ -7058,6 +7058,29 @@ class TestTaskPublicCreateAPI(BaseTaskAPITest):
             (task.options or {}).get("repositories"), [{"name": "posthog/posthog", "initial_branch": None}]
         )
 
+    @parameterized.expand(
+        [
+            ("omitted", {}, ["posthog/posthog"], True),
+            ("empty", {"repositories": []}, [], False),
+        ]
+    )
+    def test_an_empty_repositories_option_stops_the_task_inheriting_the_channel_repositories(
+        self, _name: str, options: dict[str, Any], repositories: list[str], gets_integration: bool
+    ) -> None:
+        integration = Integration.objects.create(team=self.team, kind="github", integration_id="1", config={})
+        channel = Channel.objects.unscoped().create(
+            team=self.team, name="growth", repositories=["posthog/posthog"], github_integration=integration
+        )
+
+        response = self._create(profile="test.public", channel=str(channel.id), options=options)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
+        task = Task.objects.get(id=response.json()["id"])
+        self.assertEqual(
+            (task.repositories, task.github_integration_id),
+            (repositories, integration.id if gets_integration else None),
+        )
+
     @patch("products.tasks.backend.presentation.views.api._is_internal_debug_team", return_value=True)
     @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
     def test_create_with_a_public_profile_can_start_the_first_run(self, _mock_workflow, _mock_internal_team) -> None:

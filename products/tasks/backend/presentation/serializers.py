@@ -1421,7 +1421,7 @@ class TaskCreateSerializer(TaskWriteSerializer, TaskRunScheduleSerializer):
         run_only = run_only_option_names(options)
         if run_only and not attrs.get("start_run"):
             raise serializers.ValidationError({"options": f"Set start_run to true to use {', '.join(run_only)}."})
-        fields = create_fields_from_options(options)
+        fields = create_fields_from_options(options, repositories_given="repositories" in options_data)
         repeated = sorted(
             name
             for name in fields

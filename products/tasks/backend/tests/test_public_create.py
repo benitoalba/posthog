@@ -68,6 +68,20 @@ class TestPublicCreateOptions(SimpleTestCase):
 
         self.assertEqual(create_fields_from_options(options), expected)
 
+    @parameterized.expand(
+        [
+            ("omitted", {}, {}),
+            ("empty", {"repositories": []}, {"repositories": []}),
+            ("empty_beside_other_options", {"repositories": [], "model": "m"}, {"repositories": [], "model": "m"}),
+        ]
+    )
+    def test_an_empty_repositories_option_stays_distinct_from_an_omitted_one(
+        self, _name: str, data: dict[str, Any], expected: dict[str, Any]
+    ) -> None:
+        fields = create_fields_from_options(options_from_request(data), repositories_given="repositories" in data)
+
+        self.assertEqual(fields, expected)
+
     def test_options_left_unset_create_no_fields(self) -> None:
         self.assertEqual(create_fields_from_options(options_from_request({})), {})
 
