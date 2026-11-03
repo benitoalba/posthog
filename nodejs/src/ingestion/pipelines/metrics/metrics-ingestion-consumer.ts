@@ -7,6 +7,7 @@ import { RedisV2 } from '~/common/redis/redis-v2'
 import { AppMetricsAggregator } from '~/common/services/app-metrics-aggregator'
 import { QuotaLimiting } from '~/common/services/quota-limiting.service'
 import { instrumentFn, instrumented } from '~/common/tracing/tracing-utils'
+import { UsageRecordBatch } from '~/common/usage-ingestion/usage-record-batch'
 import { isDevEnv } from '~/common/utils/env-utils'
 import { logger } from '~/common/utils/logger'
 import { TeamManager } from '~/common/utils/team-manager'
@@ -25,6 +26,7 @@ import {
     metricsRecordsReceivedCounter,
 } from './metrics'
 import { DEFAULT_USAGE_STATS, UsageStatsByTeam } from './metrics-usage'
+import { addMetricsUsageRecords } from './metrics-usage-steps'
 import {
     DEFAULT_METRICS_RETENTION_DAYS,
     METRICS_DLQ_OUTPUT,
@@ -46,6 +48,7 @@ export interface MetricsIngestionConsumerDeps {
      * directly.
      */
     outputs: IngestionOutputs<MetricsOutput | MetricsDlqOutput | AppMetricsOutput>
+    usageBatch: UsageRecordBatch
 }
 
 /** Replaced by `MetricsPipelineConsumer`. Remove it when every environment sets `METRICS_INGESTION_USE_PIPELINE_FRAMEWORK`. */
@@ -138,6 +141,7 @@ export class MetricsIngestionConsumer {
             stats.bytesReceived += message.bytesUncompressed
             stats.recordsReceived += message.recordCount
             stats.bytesAllowed += message.bytesUncompressed
+            stats.bytesAllowedRecords += message.bytesUncompressedRecords
             stats.recordsAllowed += message.recordCount
             usageStats.set(message.teamId, stats)
 
@@ -300,17 +304,23 @@ export class MetricsIngestionConsumer {
             this.queueUsageMetric(teamId, 'bytes_received', stats.bytesReceived)
             this.queueUsageMetric(teamId, 'records_received', stats.recordsReceived)
             this.queueUsageMetric(teamId, 'bytes_ingested', stats.bytesAllowed)
+            this.queueUsageMetric(teamId, 'bytes_ingested_records', stats.bytesAllowedRecords)
             this.queueUsageMetric(teamId, 'records_ingested', stats.recordsAllowed)
             this.queueUsageMetric(teamId, 'bytes_dropped', stats.bytesDropped)
             this.queueUsageMetric(teamId, 'records_dropped', stats.recordsDropped)
         }
 
+        addMetricsUsageRecords(this.deps.usageBatch, usageStats)
+
         // Best-effort: don't let metric failures block ingestion
-        try {
-            await this.appMetricsAggregator.flush()
-        } catch (error) {
-            logger.error('🔴', 'Failed to emit usage metrics - billing data may be lost', { error })
-        }
+        await Promise.all([
+            this.appMetricsAggregator.flush().catch((error) => {
+                logger.error('🔴', 'Failed to emit usage metrics - billing data may be lost', { error })
+            }),
+            this.deps.usageBatch.flush().catch((error) => {
+                logger.error('🔴', 'Failed to emit usage records - billing data may be lost', { error })
+            }),
+        ])
     }
 
     private queueUsageMetric(teamId: number, metricName: string, count: number): void {
@@ -365,6 +375,7 @@ export class MetricsIngestionConsumer {
                     }
 
                     const bytesUncompressed = parseInt(headers.bytes_uncompressed ?? '0', 10)
+                    const bytesUncompressedRecords = parseInt(headers.bytes_uncompressed_records ?? '0', 10)
                     const bytesCompressed = parseInt(headers.bytes_compressed ?? '0', 10)
                     const recordCount = parseInt(headers.record_count ?? '0', 10)
 
@@ -373,6 +384,7 @@ export class MetricsIngestionConsumer {
                         message,
                         teamId: team.id,
                         bytesUncompressed,
+                        bytesUncompressedRecords,
                         bytesCompressed,
                         recordCount,
                     })
