@@ -448,7 +448,7 @@ class Pipeline:
         top_dirs = file_info["top_dirs"]
         breadth = scope_breadth(top_dirs)
         cc = parse_conventional_commit(pr.title)
-        results = resolve_results(POLICY.attestations, pr.check_runs, pr.attestation_results)
+        results = resolve_results(POLICY.attestations, pr.check_runs, pr.attestation_results, pr.deny_paths)
         attested = lifted_files(POLICY.attestations, results, pr.deny_paths)
         deny = detect_deny_categories(pr.deny_paths, attested)
 

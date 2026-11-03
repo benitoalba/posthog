@@ -77,12 +77,24 @@ def _actions_result(rule: Attestation, results: Mapping[str, dict]) -> Attestati
 
 
 def resolve_results(
-    rules: Iterable[Attestation], check_runs: Iterable[dict], actions_results: Mapping[str, dict]
+    rules: Iterable[Attestation],
+    check_runs: Iterable[dict],
+    actions_results: Mapping[str, dict],
+    pr_files: Iterable[str],
 ) -> dict[str, AttestationResult | None]:
-    """Each rule's result by name. None means it has not reported for this head yet."""
+    """Each rule's result by name. None means it has not reported for this head yet.
+
+    A ``pull_request`` run executes the PR's own copy of its workflow, so an Actions result for a PR
+    that edits that workflow lifts nothing and waits for nothing.
+    """
     check_runs = list(check_runs)
+    edited = set(pr_files)
     return {
-        rule.name: _check_result(rule, check_runs) if rule.check else _actions_result(rule, actions_results)
+        rule.name: _check_result(rule, check_runs)
+        if rule.check
+        else AttestationResult(completed=True)
+        if rule.actions_workflow in edited
+        else _actions_result(rule, actions_results)
         for rule in rules
     }
 
