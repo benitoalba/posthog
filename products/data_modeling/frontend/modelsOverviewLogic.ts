@@ -94,6 +94,7 @@ export interface modelsOverviewLogicValues {
     snapshotLoaded: boolean // dataQualityOverviewLogic
     attentionModels: AttentionModel[] // modelsSceneLogic
     behindSchedule: BehindScheduleModel[] // modelsSceneLogic
+    catalogRestructureEnabled: boolean // modelsSceneLogic
     modelsFailed: boolean // modelsSceneLogic
     modelsResolved: boolean // modelsSceneLogic
     noModelsYet: boolean // modelsSceneLogic
@@ -182,7 +183,15 @@ export const modelsOverviewLogic = kea<modelsOverviewLogicType>([
     connect(() => ({
         values: [
             modelsSceneLogic,
-            ['nodes', 'attentionModels', 'behindSchedule', 'modelsResolved', 'modelsFailed', 'noModelsYet'],
+            [
+                'nodes',
+                'attentionModels',
+                'behindSchedule',
+                'modelsResolved',
+                'modelsFailed',
+                'noModelsYet',
+                'catalogRestructureEnabled',
+            ],
             dataQualityOverviewLogic,
             ['checks', 'checksTruncated', 'checksStatus', 'snapshotLoaded', 'overviewError'],
         ],
