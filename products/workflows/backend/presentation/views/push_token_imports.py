@@ -102,13 +102,11 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     scope_object = "integration"
     scope_object_read_actions = ["retrieve", "latest"]
     scope_object_write_actions = ["create", "cancel", "import_unknown_persons"]
-    # Imports change push channels and list people's distinct IDs, so only project admins see them.
     permission_classes = [TeamMemberAdminManagementPermission]
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = PushTokenImportSerializer
 
     def dangerously_get_required_scopes(self, request: Request, view: Any) -> list[str] | None:
-        # An import writes person properties and tells which distinct IDs have a person.
         if self.action in self.scope_object_write_actions:
             return ["integration:write", "person:write"]
         return ["integration:read", "person:read"]

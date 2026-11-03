@@ -340,12 +340,10 @@ export const pushTokenImportLogic = kea<pushTokenImportLogicType>([
             try {
                 job = await pushTokenImportsRetrieve(String(currentProjectId), currentImport.id)
             } catch (error: any) {
-                // Without access the import can't be followed, so polling stops instead of repeating the error.
                 if (error?.status === 403 || error?.status === 404) {
                     actions.requestFailed(errorMessage(error, "Couldn't read the import."))
                     return
                 }
-                // Any other failed read is retried on the next poll. The import keeps running on the server.
             }
             breakpoint()
             if (values.currentImport?.id !== job.id) {
