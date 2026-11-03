@@ -11,11 +11,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name="signalreport",
-            name="first_publication_event",
-            field=models.JSONField(blank=True, null=True),
-        ),
-        migrations.AddField(
             model_name="signalreporttask",
             name="report_content_revision_count",
             field=models.IntegerField(blank=True, null=True),
