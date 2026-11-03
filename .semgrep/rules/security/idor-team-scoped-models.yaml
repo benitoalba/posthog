@@ -430,6 +430,7 @@ rules:
 
                               |AnomalyScoringState
                               |AnomalyScoringDueInsight
+                              |PushTokenImport
                               |SignalScratchpad
                               |SignalProjectProfile
                               |SingleSessionSummary
@@ -928,6 +929,7 @@ rules:
 
                         |AnomalyScoringState
                         |AnomalyScoringDueInsight
+                        |PushTokenImport
                         |SignalScratchpad
                         |SignalProjectProfile
                         |SingleSessionSummary

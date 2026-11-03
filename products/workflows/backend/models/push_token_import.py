@@ -25,7 +25,7 @@ class PushTokenImport(TeamScopedRootMixin, UUIDModel):
     team = models.ForeignKey("posthog.Team", on_delete=models.CASCADE, db_constraint=False, related_name="+")
     # Integration rows are read through the integrations SDK, which hands out ids, not model instances.
     integration_id = models.BigIntegerField()
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RUNNING)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RUNNING.value)
     file_name = models.CharField(max_length=400, blank=True, default="")
     create_missing_persons = models.BooleanField(default=False)
     total_devices = models.PositiveIntegerField(default=0)

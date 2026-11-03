@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from posthog.api.mixins import ValidatedRequest, validated_request
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.models.user import User
-from posthog.permissions import TeamMemberStrictManagementPermission
+from posthog.permissions import TeamMemberAdminManagementPermission
+from posthog.rate_limit import PushTokenImportThrottle
 
 from products.workflows.backend.facade.enums import PushTokenImportRowFailureReason, PushTokenImportStatus
 from products.workflows.backend.facade.push_token_import import (
@@ -101,10 +102,26 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     scope_object = "integration"
     scope_object_read_actions = ["retrieve", "latest"]
     scope_object_write_actions = ["create", "cancel", "import_unknown_persons"]
-    # Importing devices changes a push channel, which only project admins can do.
-    permission_classes = [TeamMemberStrictManagementPermission]
+    permission_classes = [TeamMemberAdminManagementPermission]
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = PushTokenImportSerializer
+
+    def dangerously_get_required_scopes(self, request: Request, view: Any) -> list[str] | None:
+        if self.action in self.scope_object_write_actions:
+            return ["integration:write", "person:write"]
+        return ["integration:read", "person:read"]
+
+    def initial(self, request: Request, *args: Any, **kwargs: Any) -> None:
+        super().initial(request, *args, **kwargs)
+        # Session users skip API scopes, and access control checks only the integration scope_object.
+        writes = self.action in self.scope_object_write_actions
+        if not self.user_access_control.check_access_level_for_resource("person", "editor" if writes else "viewer"):
+            raise exceptions.PermissionDenied("You need access to persons to import push devices.")
+
+    def get_throttles(self) -> list[Any]:
+        if self.action in ("create", "import_unknown_persons"):
+            return [PushTokenImportThrottle(), *super().get_throttles()]
+        return super().get_throttles()
 
     @extend_schema(
         request=PushTokenImportCreateSerializer,
@@ -150,7 +167,7 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     @action(methods=["GET"], detail=False)
     def latest(self, request: ValidatedRequest, **kwargs: Any) -> Response:
         record = latest_push_token_import(self.team_id, request.validated_query_data["integration_id"])
-        return Response({"latest": _serialize(record) if record else None})
+        return Response(PushTokenImportLatestSerializer({"latest": record}).data)
 
     @extend_schema(request=None, responses={200: PushTokenImportSerializer}, summary="Stop a running push token import")
     @action(methods=["POST"], detail=True)
