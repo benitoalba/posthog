@@ -1733,13 +1733,13 @@ snapshots:
     components-integrations-slack--slack-full-page-connect--light:
         hash: v1.k794b7964.43f9ed59c7ada1816c3868080fbed403f9d77b62366cdc4537779e3541e9326b.wItDTj0Z5U5FlAltTgn5YnNgC444wkCDR8yhBDf5KIo
     components-integrations-slack--slack-full-page-connected-all-scopes--dark:
-        hash: v1.k794b7964.f23aecf6ced3a0a5187194cc3e7b7d2908be00cd1cef463aee61c0335c61d1a1.Cpd3UrvoUfWC8OCXv54mEs7LmMrhOCylorsVY3w3pP0
+        hash: v1.k794b7964.25cf7ea1b757455345a1c4b140e80968322c443b88ceae554f90988c978b15d6.wAhrrmicwDNTypTIsAiTxf7010RUMptmw2plttfZPEk
     components-integrations-slack--slack-full-page-connected-all-scopes--light:
-        hash: v1.k794b7964.0fb31dd9edbb2348ad73cef42960602be6cbe75044a9c2cf46aa6d6646d8b81a.8sYKZtq2DPh0p6Am8XQ2SqFXnu7RKKX-xwhhHQiH9Kg
+        hash: v1.k794b7964.0a4dc08898e39db3960e0f81aa58ba2366b353cd4142126de3658cf2d23fa69a.SmicoM0bwEmzPEFbhA_AolDD4Iq_DtraQDRHUIjrwX8
     components-integrations-slack--slack-full-page-connected-missing-scopes--dark:
-        hash: v1.k794b7964.a247e90d2db2de4157ae8eda4160326ca3871caa8b25fbd7dac017c3862c1361.wT-fz9r9IRvyJWa61h2zGOHIM__4Ejj_7uoA35YwzZY
+        hash: v1.k794b7964.242a4763de78ca0183982f092358e71eec44d1318be104e8a617efbeb093e373.07N5rM8P-qPhiRXjps0Or7RM_UNULkGKKDLeB8DKmNY
     components-integrations-slack--slack-full-page-connected-missing-scopes--light:
-        hash: v1.k794b7964.36d3c66dbb4003f3f9f1ae43b58594cca7173585a6b93b13617e4e6509b70a21.WnrbnjXsjlke2YiAuEBwM4hMytpWPQauuGOBNlX0dRc
+        hash: v1.k794b7964.9147841812bc3caee4cdf757616714fa468b6feb0bfa1ec1dbe6f46cf0541d60.ZIBqcZzAzEp2ezQim_gFk-W_sIBvxnIs1ZxkSu3yjUQ
     components-integrations-slack--slack-integration--dark:
         hash: v1.k794b7964.1bcb0a5391d8290b0bdc18f53b3a3363dad6c03cfce5ffb28bdc4d8b26185f5d._h-SOFA2XkHyVKX9pGcZQItPw6XVxVXbouougXrIqko
     components-integrations-slack--slack-integration--light:
@@ -16778,6 +16778,10 @@ snapshots:
         hash: v1.k794b7964.3f953504a96f3d295e23721dbd39a6282ce5f719a7b7a50ca2f083c3c061660c.S12DDcG_kP6-5Y0hlBTZFDKUKAuzTBP9kPXFlqI0umE
     scenes-other-onboarding-install-step--control-arm--light:
         hash: v1.k794b7964.03f1893573652b0c32218385c83819272c30e7a87647ea479aa6c17100efa604.Ullr23ou7-8Q_0mO44avKU97VGRSbZGcK96bg8Hlwyk
+    scenes-other-onboarding-install-step--simple-flow--dark:
+        hash: v1.k794b7964.82e295b93aca26c287b4207345daa25386169a22f859bcf6ffc826dc119fe753.gcs2PUEkwq8sVKLDiV89qsV53RH8PgsAaC1iPJ9WQ04
+    scenes-other-onboarding-install-step--simple-flow--light:
+        hash: v1.k794b7964.125b132e09d3238ca209e88a17aad57778c93ba453d6b8c1a55bad2cf9a37c81.xneZrlfKJkSgGBZkZpeo7_i45_aJE9A0mFWZ1cwiqpU
     scenes-other-onboarding-product-selection--base--dark:
         hash: v1.k794b7964.b60ec49c9c54425935da72dee08b9af582389d080594a5ab04047940ea3d2ca0.BUp2Cv79bdb2-k0twgulEJlDBQ_Ipk0dL-SoQ-3MiD4
     scenes-other-onboarding-product-selection--base--light:
@@ -17047,9 +17051,9 @@ snapshots:
     scenes-other-welcome-dialog--no-inviter--light:
         hash: v1.k794b7964.f766cbd27b7bc11b50ce42602ca2fcab11fa005e795aad0d66e6f67e627570d2.M3CFGWAqq3ebMX5h9Rlb9cCCOBUfhrdc86fQexL6-MA
     scenes-other-welcome-dialog--provisioned--dark:
-        hash: v1.k794b7964.f2c3d2da5c26ff0d4e4883583589df344c65b8d6b58ae37ef5c4792c02b5d026.G7Cluv7BykKb0ZB6ox1bq_ETjWtz13E0kNhkGxqV-ao
+        hash: v1.k794b7964.4624c39797f30be4664c956382e53f065207d2a5c3c10dc923ef5d670a6c4cbd.wgrcJwwsFI0sB4jHPZb_jmpnhkoLO3TFXN5zkw3tPHo
     scenes-other-welcome-dialog--provisioned--light:
-        hash: v1.k794b7964.7bc96d4f26a15090c0e0822f013065ffbf00a22f0edda8572b12c01a531fe6dc.x21M2rAOPxoCSK84EZ-zyIs4Mvpl_BEBXhi33H3UJzw
+        hash: v1.k794b7964.fa2f4c4df2000b0aac6b2d030e35e09b87ccff491a31f6526b0510c497694c57.0RINcqkztk_dHUnIPDZmxsYcQaJuuv3XJPCtwFi8Yq8
     scenes-other-welcome-flagshipproductscard--default--dark:
         hash: v1.k794b7964.0f57eeaac62cc6fa6fcd833c9d2bc8fd0d30d8ab5e9819b685b4b2bb7052cdca.oPfu3XSL2xF96rf2RAWtGdSkWwDPbnjxiTntYx82B6c
     scenes-other-welcome-flagshipproductscard--default--light:
