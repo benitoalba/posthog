@@ -48,6 +48,7 @@ class PrAuthorship(StrEnum):
 class WarmQuota(StrEnum):
     NONE = "none"
     AI_CREDITS = "ai_credits"
+    POSTHOG_AI = "posthog_ai"
 
 
 class GithubAccess(StrEnum):

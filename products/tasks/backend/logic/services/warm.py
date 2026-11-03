@@ -73,6 +73,7 @@ def _posthog_ai_checker(team: Team, user: User) -> None:
 
 _CHECKERS_BY_WARM_QUOTA: dict[WarmQuota, Callable[[Team, User], None] | None] = {
     WarmQuota.AI_CREDITS: _ai_credits_checker,
+    WarmQuota.POSTHOG_AI: _posthog_ai_checker,
     WarmQuota.NONE: None,
 }
 

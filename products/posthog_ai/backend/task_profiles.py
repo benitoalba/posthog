@@ -39,7 +39,7 @@ POSTHOG_AI = TaskProfile(
     drive=DrivePolicy.OWNER,
     access_gate=AccessGate.DESKTOP_CODE,
     max_live_per_user=None,
-    warm=WarmPolicy(quota=WarmQuota.AI_CREDITS, per_user_cap=2, per_org_cap=10, feature_flag=None),
+    warm=WarmPolicy(quota=WarmQuota.POSTHOG_AI, per_user_cap=2, per_org_cap=10, feature_flag=None),
     runtimes=("acp",),
     sandbox_templates=("default_base",),
     network=NetworkPolicy(levels=(NetworkAccess.FULL,)),

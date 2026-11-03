@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from posthog.test.base import APIBaseTest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from parameterized import parameterized
 from rest_framework.exceptions import PermissionDenied, Throttled
@@ -289,6 +289,7 @@ class TestSandboxWarmerProfilePolicy(APIBaseTest):
                 Task.OriginProduct.POSTHOG_AI,
                 None,
                 False,
+                True,
                 PermissionDenied,
             ),
             (
@@ -296,12 +297,14 @@ class TestSandboxWarmerProfilePolicy(APIBaseTest):
                 Task.OriginProduct.ERROR_TRACKING,
                 WarmPolicy(quota=WarmQuota.AI_CREDITS, per_user_cap=2, per_org_cap=10, feature_flag=None),
                 False,
+                True,
                 None,
             ),
             (
                 "profile_ai_credits_quota_blocks_a_limited_team",
                 Task.OriginProduct.ERROR_TRACKING,
                 WarmPolicy(quota=WarmQuota.AI_CREDITS, per_user_cap=2, per_org_cap=10, feature_flag=None),
+                True,
                 True,
                 QuotaLimitExceeded,
             ),
@@ -310,14 +313,35 @@ class TestSandboxWarmerProfilePolicy(APIBaseTest):
                 Task.OriginProduct.POSTHOG_AI,
                 WarmPolicy(quota=WarmQuota.NONE, per_user_cap=2, per_org_cap=10, feature_flag=None),
                 True,
+                True,
                 None,
+            ),
+            (
+                "profile_posthog_ai_quota_refuses_a_user_without_access",
+                Task.OriginProduct.POSTHOG_AI,
+                WarmPolicy(quota=WarmQuota.POSTHOG_AI, per_user_cap=2, per_org_cap=10, feature_flag=None),
+                False,
+                False,
+                PermissionDenied,
+            ),
+            (
+                "profile_posthog_ai_quota_still_checks_credits",
+                Task.OriginProduct.POSTHOG_AI,
+                WarmPolicy(quota=WarmQuota.POSTHOG_AI, per_user_cap=2, per_org_cap=10, feature_flag=None),
+                True,
+                True,
+                QuotaLimitExceeded,
             ),
         ]
     )
-    def test_enforce_quota_follows_the_profile(self, _name, origin, warm, team_limited, expected_error):
+    def test_enforce_quota_follows_the_profile(self, _name, origin, warm, team_limited, access_allowed, expected_error):
         profile = self._profile(origin, warm)
+        access = MagicMock(allowed=access_allowed)
 
-        with patch(f"{WARM}.is_team_limited", return_value=team_limited):
+        with (
+            patch(f"{WARM}.is_team_limited", return_value=team_limited),
+            patch(f"{WARM}.get_posthog_ai_access_decision", return_value=access),
+        ):
             if expected_error is None:
                 SandboxWarmer.enforce_quota(origin, self.team, self.user, profile=profile)
             else:
