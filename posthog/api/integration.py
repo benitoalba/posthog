@@ -1695,6 +1695,12 @@ class IntegrationViewSet(
             return [*base_permissions, TeamMemberLightManagementPermission()]
         raise NotImplementedError()
 
+    def dangerously_get_required_scopes(self, request: Request, view: Any) -> list[str] | None:
+        # Importing devices writes person properties and tells which distinct IDs have a person.
+        if self.action == "push_tokens":
+            return ["integration:write", "person:write"]
+        return None
+
     def get_throttles(self):
         if self.action == "refresh_github_repos":
             return [GitHubRepositoryRefreshThrottle(), *super().get_throttles()]
@@ -2855,6 +2861,9 @@ class IntegrationViewSet(
     )
     @action(methods=["POST"], detail=True, url_path="push_tokens")
     def push_tokens(self, request: ValidatedRequest, **kwargs) -> Response:
+        # Session users skip API scopes, and access control checks only the integration scope_object.
+        if not self.user_access_control.check_access_level_for_resource("person", "editor"):
+            raise PermissionDenied("You need edit access to persons to import push devices.")
         integration = self.get_object()
         if not push_channel_app_id(integration):
             raise ValidationError("Device tokens can only be imported into an APNs or Firebase push channel.")
