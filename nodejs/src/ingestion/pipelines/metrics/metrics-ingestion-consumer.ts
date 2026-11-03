@@ -25,6 +25,7 @@ import {
     metricsRecordsReceivedCounter,
 } from './metrics'
 import { DEFAULT_USAGE_STATS, UsageStatsByTeam } from './metrics-usage'
+import { USAGE_METRIC_NAMES } from './metrics-usage-steps'
 import {
     DEFAULT_METRICS_RETENTION_DAYS,
     METRICS_DLQ_OUTPUT,
@@ -298,13 +299,9 @@ export class MetricsIngestionConsumer {
 
     private async emitUsageMetrics(usageStats: UsageStatsByTeam): Promise<void> {
         for (const [teamId, stats] of usageStats) {
-            this.queueUsageMetric(teamId, 'bytes_received', stats.bytesReceived)
-            this.queueUsageMetric(teamId, 'records_received', stats.recordsReceived)
-            this.queueUsageMetric(teamId, 'bytes_ingested', stats.bytesAllowed)
-            this.queueUsageMetric(teamId, 'bytes_ingested_records', stats.bytesAllowedRecords)
-            this.queueUsageMetric(teamId, 'records_ingested', stats.recordsAllowed)
-            this.queueUsageMetric(teamId, 'bytes_dropped', stats.bytesDropped)
-            this.queueUsageMetric(teamId, 'records_dropped', stats.recordsDropped)
+            for (const [statKey, metricName] of USAGE_METRIC_NAMES) {
+                this.queueUsageMetric(teamId, metricName, stats[statKey])
+            }
         }
 
         // Best-effort: don't let metric failures block ingestion
