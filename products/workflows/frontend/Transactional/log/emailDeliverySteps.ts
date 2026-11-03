@@ -33,92 +33,75 @@ function countOf(timeline: readonly TransactionalEmailLogEventApi[], kind: Email
     return timeline.filter((event) => event.kind === kind).length
 }
 
+function step(
+    key: string,
+    label: string,
+    event: { at: string } | undefined,
+    previousAt: string | null,
+    detail: string | null = null
+): DeliveryStep {
+    return { key, label, state: event ? 'done' : 'pending', at: event?.at ?? null, detail, previousAt }
+}
+
+function repeated(count: number, verb: string): string | null {
+    return count > 1 ? `${verb} ${count} times` : null
+}
+
 /** The steps an email went through, ending at its first failure. */
 export function buildDeliverySteps(email: TransactionalEmailLogDetailApi): DeliveryStep[] {
     const { timeline } = email
-    const queued = firstOf(timeline, 'queued')
     const sent = firstOf(timeline, 'sent')
     const delivered = firstOf(timeline, 'delivered')
     const opened = firstOf(timeline, 'opened')
-    const clicked = firstOf(timeline, 'clicked')
     const failure = timeline.find((event) => FAILURE_KINDS.includes(event.kind))
-    const queuedAt = queued?.at ?? email.created_at
-    const opens = countOf(timeline, 'opened')
-    const clicks = countOf(timeline, 'clicked')
+    const queuedAt = firstOf(timeline, 'queued')?.at ?? email.created_at
+    const stopped = (
+        kind: 'failed' | 'bounced' | 'complained',
+        previousAt: string | null,
+        detail: string | null
+    ): DeliveryStep => ({
+        key: kind,
+        label: EMAIL_STATUS_LABEL[kind],
+        state: 'failed',
+        at: failure?.at ?? null,
+        detail,
+        previousAt,
+    })
+    const reason = emailReasonText(failure?.reason ?? email.reason)
+    const queuedStep = step('queued', 'Queued', { at: queuedAt }, null)
 
-    // A send that went out shows Sent as its first step. Queued only matters while it waits, or when it stopped there.
-    const steps: DeliveryStep[] =
-        sent && email.status !== 'failed'
-            ? []
-            : [{ key: 'queued', label: 'Queued', state: 'done', at: queuedAt, detail: null, previousAt: null }]
     if (email.status === 'failed') {
-        steps.push({
-            key: 'failed',
-            label: EMAIL_STATUS_LABEL.failed,
-            state: 'failed',
-            at: failure?.at ?? null,
-            detail: emailReasonText(failure?.reason ?? email.reason),
-            previousAt: queuedAt,
-        })
-        return steps
+        return [queuedStep, stopped('failed', queuedAt, reason)]
     }
-    steps.push({
-        key: 'sent',
-        label: 'Sent',
-        state: sent ? 'done' : 'pending',
-        at: sent?.at ?? null,
-        detail: null,
-        previousAt: steps.length ? queuedAt : null,
-    })
+    // A send that went out shows Sent as its first step. Queued only matters while it waits.
+    const lead = sent ? [] : [queuedStep]
+    const sentStep = step('sent', 'Sent', sent, lead.length ? queuedAt : null)
     if (email.status === 'bounced') {
-        steps.push({
-            key: 'bounced',
-            label: EMAIL_STATUS_LABEL.bounced,
-            state: 'failed',
-            at: failure?.at ?? null,
-            detail: emailReasonText(failure?.reason ?? email.reason),
-            previousAt: sent?.at ?? null,
-        })
-        return steps
+        return [...lead, sentStep, stopped('bounced', sent?.at ?? null, reason)]
     }
-    steps.push({
-        key: 'delivered',
-        label: 'Delivered',
-        state: delivered || email.status === 'complained' ? 'done' : 'pending',
-        at: delivered?.at ?? null,
-        detail: null,
-        previousAt: sent?.at ?? null,
-    })
+    // A spam report proves the email arrived, even when the delivery update has not.
+    const deliveredStep = step('delivered', 'Delivered', delivered, sent?.at ?? null)
     if (email.status === 'complained') {
-        steps.push({
-            key: 'complained',
-            label: EMAIL_STATUS_LABEL.complained,
-            state: 'failed',
-            at: failure?.at ?? null,
-            detail: 'The recipient reported this email as spam',
-            previousAt: delivered?.at ?? sent?.at ?? null,
-        })
-        return steps
+        return [
+            ...lead,
+            sentStep,
+            { ...deliveredStep, state: 'done' },
+            stopped('complained', delivered?.at ?? sent?.at ?? null, 'The recipient reported this email as spam'),
+        ]
     }
-    steps.push(
-        {
-            key: 'opened',
-            label: 'Opened',
-            state: opened ? 'done' : 'pending',
-            at: opened?.at ?? null,
-            detail: opens > 1 ? `Opened ${opens} times` : null,
-            previousAt: delivered?.at ?? null,
-        },
-        {
-            key: 'clicked',
-            label: 'Clicked',
-            state: clicked ? 'done' : 'pending',
-            at: clicked?.at ?? null,
-            detail: clicks > 1 ? `Clicked ${clicks} times` : null,
-            previousAt: opened?.at ?? delivered?.at ?? null,
-        }
-    )
-    return steps
+    return [
+        ...lead,
+        sentStep,
+        deliveredStep,
+        step('opened', 'Opened', opened, delivered?.at ?? null, repeated(countOf(timeline, 'opened'), 'Opened')),
+        step(
+            'clicked',
+            'Clicked',
+            firstOf(timeline, 'clicked'),
+            opened?.at ?? delivered?.at ?? null,
+            repeated(countOf(timeline, 'clicked'), 'Clicked')
+        ),
+    ]
 }
 
 /** "3s later", for the time between a step and the one before it. */
