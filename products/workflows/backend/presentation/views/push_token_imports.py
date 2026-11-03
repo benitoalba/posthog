@@ -167,7 +167,7 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     @action(methods=["GET"], detail=False)
     def latest(self, request: ValidatedRequest, **kwargs: Any) -> Response:
         record = latest_push_token_import(self.team_id, request.validated_query_data["integration_id"])
-        return Response({"latest": _serialize(record) if record else None})
+        return Response(PushTokenImportLatestSerializer({"latest": record}).data)
 
     @extend_schema(request=None, responses={200: PushTokenImportSerializer}, summary="Stop a running push token import")
     @action(methods=["POST"], detail=True)
