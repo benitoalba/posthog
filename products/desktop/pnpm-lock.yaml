@@ -1008,8 +1008,8 @@ importers:
         specifier: ^11.17.0
         version: 11.17.0
       posthog-js:
-        specifier: ^1.444.4
-        version: 1.444.4(@types/react@19.2.17)(react@19.2.6)
+        specifier: ^1.445.1
+        version: 1.445.1(@types/react@19.2.17)(react@19.2.6)
       radix-themes-tw:
         specifier: 0.2.3
         version: 0.2.3
@@ -1304,8 +1304,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       posthog-js:
-        specifier: ^1.444.4
-        version: 1.444.4(@types/react@19.2.17)(react@19.2.6)
+        specifier: ^1.445.1
+        version: 1.445.1(@types/react@19.2.17)(react@19.2.6)
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -11046,8 +11046,8 @@ packages:
     resolution: {integrity: sha512-g50586zr4bZmwFiTlflMu8E0bDTb5I5gertgwAKmsdUlTQIhZtunzUlD1WSzwcVWPoAVpsrA6vlfCD7oXvRwgg==}
     engines: {node: ^10 || ^12 || >=14}
 
-  posthog-js@1.444.4:
-    resolution: {integrity: sha512-oZgy3ETGhygPewB+UNbdu9htO0u2b3EmTdGSdyc+jCpFyuhOW+Yd+3ZccifkhwouUchMAk1ps9R3vZd1iCB/wA==}
+  posthog-js@1.445.1:
+    resolution: {integrity: sha512-cKQrk5KHulL/bPZWrWsAFP949PLDwzcYNLRi456gI9M7fZ1LmehpNjz54BPrqA9LVRKiz1e26mn02RCLn/wAeQ==}
     peerDependencies:
       '@types/react': ^19.2.15
       react: 19.2.6
@@ -23490,7 +23490,7 @@ snapshots:
       source-map-js: 1.2.1
     optional: true
 
-  posthog-js@1.444.4(@types/react@19.2.17)(react@19.2.6):
+  posthog-js@1.445.1(@types/react@19.2.17)(react@19.2.6):
     dependencies:
       '@posthog/browser-common': 0.10.4
       '@posthog/core': 1.62.1
