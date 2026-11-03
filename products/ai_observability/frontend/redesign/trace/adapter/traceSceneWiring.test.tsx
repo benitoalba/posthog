@@ -52,6 +52,8 @@ const EXPORT_URL = '/api/projects/:team_id/ai_observability/traces/:id/exports/'
 const PULL_REQUEST_URL = '/api/projects/:team_id/ai_observability/traces/:id/pull_request/'
 const SEARCH_URL = '/api/projects/:team_id/ai_observability/traces/:id/search/'
 const SUMMARY_URL = '/api/projects/:team_id/ai_observability/traces/:id/summary/'
+const REVIEW_URL = '/api/projects/:team_id/ai_observability/traces/:id/review/'
+const REVIEW_QUEUES_URL = '/api/projects/:team_id/llm_analytics/review_queues/'
 const answeredGeneration = makeNodeDetail({
     id: 'gen-2',
     properties: {
@@ -78,6 +80,10 @@ const evaluationsMock = { [EVALUATIONS_URL]: () => [200, makeEvaluationResults()
 let clusters: TraceClusterApi[] = []
 const clustersMock = { [CLUSTERS_URL]: () => [200, { clusters }] }
 const feedbackMock = { [FEEDBACK_URL]: () => [200, makeFeedback({ scores: [], responses: [] })] }
+const reviewMock = {
+    [REVIEW_URL]: () => [200, { review: null, queue: null }],
+    [REVIEW_QUEUES_URL]: () => [200, { count: 0, next: null, previous: null, results: [] }],
+}
 
 const generation = makeEvent({
     id: 'gen-1',
@@ -130,6 +136,7 @@ describe('TraceScene', () => {
                     ...evaluationsMock,
                     ...clustersMock,
                     ...feedbackMock,
+                    ...reviewMock,
                 },
             })
         })
@@ -467,6 +474,69 @@ describe('TraceScene', () => {
             expect(queryByText('Add to dataset') !== null).toBe(enabled)
         })
 
+        it.each([
+            {
+                name: 'reviewed',
+                status: {
+                    review: {
+                        reviewedBy: 'Ada',
+                        reviewedAt: '2026-09-01T10:20:00Z',
+                        comment: null,
+                        scores: [{ name: 'Tone', value: '4.5', label: 'Tone: 4.5' }],
+                    },
+                    queue: null,
+                },
+                shown: ['Reviewed · 1 score', 'Edit review'],
+                menu: null,
+            },
+            {
+                name: 'queued',
+                status: { review: null, queue: { id: 'q1', name: 'Support QA', itemId: 'i1' } },
+                shown: ['Support QA', 'Review'],
+                menu: { shown: ['Move to another queue', 'Remove from queue'], hidden: ['Add to queue'] },
+            },
+            {
+                name: 'neither',
+                status: { review: null, queue: null },
+                shown: ['Review'],
+                menu: { shown: ['Add to queue'], hidden: ['Move to another queue', 'Remove from queue'] },
+            },
+        ])('shows the review state and its actions in the header when $name', async ({ status, shown, menu }) => {
+            useMocks({ get: { [REVIEW_URL]: () => [200, status] } })
+            const { container, findByText, queryByText } = renderNewView()
+
+            for (const text of shown) {
+                expect(await findByText(text)).toBeTruthy()
+            }
+            const menuButton = container.querySelector('[data-attr="trace-view-review-queue-menu"]')
+            expect(menuButton !== null).toBe(menu !== null)
+            if (menu && menuButton) {
+                fireEvent.click(menuButton)
+                for (const text of menu.shown) {
+                    expect(await findByText(text)).toBeTruthy()
+                }
+                for (const text of menu.hidden) {
+                    expect(queryByText(text)).toBeNull()
+                }
+            }
+        })
+
+        it('closes the whole queue menu when New queue opens its form', async () => {
+            const { container, findByText, queryByText } = renderNewView()
+            await findByText('Review')
+            const menuButton = container.querySelector('[data-attr="trace-view-review-queue-menu"]')
+            if (!menuButton) {
+                throw new Error('expected the queue menu')
+            }
+
+            fireEvent.click(menuButton)
+            fireEvent.click(await findByText('Add to queue'))
+            fireEvent.click(await findByText('New queue…'))
+
+            expect(await findByText('New review queue')).toBeTruthy()
+            await waitFor(() => expect(queryByText('Add to queue')).toBeNull())
+        })
+
         it('opens the feedback from the header chip and the step chips, and links each entry to its step', async () => {
             useMocks({
                 get: {
@@ -526,6 +596,7 @@ describe('TraceScene', () => {
                     ...evaluationsMock,
                     ...clustersMock,
                     ...feedbackMock,
+                    ...reviewMock,
                 },
             })
         })

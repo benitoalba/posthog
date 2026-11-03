@@ -9,6 +9,7 @@ import {
     LemonSegmentedButton,
     LemonTag,
     LemonTextArea,
+    SideAction,
     Spinner,
 } from '@posthog/lemon-ui'
 
@@ -327,6 +328,7 @@ export function TraceReviewButton({
     buttonClassName,
     buttonLabel,
     onReviewSaved,
+    sideAction,
 }: {
     traceId: string
     queueId?: string | null
@@ -335,6 +337,7 @@ export function TraceReviewButton({
     buttonClassName?: string
     buttonLabel?: string
     onReviewSaved?: () => void
+    sideAction?: SideAction
 }): JSX.Element {
     const logic = useMountedLogic(traceReviewModalLogic({ traceId, queueId }))
     const { getTraceReview } = useValues(traceReviewsLazyLoaderLogic)
@@ -398,6 +401,7 @@ export function TraceReviewButton({
                         disabled={disabled}
                         disabledReason={disabledReason}
                         className={buttonClassName || 'shrink-0'}
+                        sideAction={sideAction}
                         data-attr="llma-trace-review-button"
                     >
                         {resolvedButtonLabel}
