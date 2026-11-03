@@ -169,6 +169,7 @@ tools:
         enabled: true
         scopes:
             - integration:write
+            - person:write
         annotations:
             readOnly: false
             destructive: false

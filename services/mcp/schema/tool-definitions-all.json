@@ -8860,7 +8860,7 @@
         "feature": "integrations",
         "summary": "Import push device tokens",
         "title": "Import push device tokens",
-        "required_scopes": ["integration:write"],
+        "required_scopes": ["integration:write", "person:write"],
         "api_operations": ["POST /api/projects/{project_id}/integrations/{id}/push_tokens/"],
         "annotations": {
             "destructiveHint": false,
