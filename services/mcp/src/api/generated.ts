@@ -71991,16 +71991,16 @@ export namespace Schemas {
     }
 
     /**
-     * * `self_driving` - SELF_DRIVING
-     * * `bot_author` - BOT_AUTHOR
-     * * `manual` - MANUAL
-     * * `label` - LABEL
-     * * `all` - ALL
+     * * `self_driving` - Self-driving inbox
+     * * `bot_author` - Bot admitted by policy
+     * * `manual` - Requested
+     * * `label` - Trigger label
+     * * `all` - Every pull request
      */
-    export type ReviewRunTriggerEnum = typeof ReviewRunTriggerEnum[keyof typeof ReviewRunTriggerEnum];
+    export type ReviewTriggerEnum = typeof ReviewTriggerEnum[keyof typeof ReviewTriggerEnum];
 
 
-    export const ReviewRunTriggerEnum = {
+    export const ReviewTriggerEnum = {
       SelfDriving: 'self_driving',
       BotAuthor: 'bot_author',
       Manual: 'manual',
@@ -72128,12 +72128,12 @@ export namespace Schemas {
       readonly delivery_id: string | null;
       /** What caused this run to exist: self-driving inbox provenance, a bot that the repo's policy admits, a manual request through the API, the repo's trigger label, or the repo reviewing every PR event.
        *
-       * * `self_driving` - SELF_DRIVING
-       * * `bot_author` - BOT_AUTHOR
-       * * `manual` - MANUAL
-       * * `label` - LABEL
-       * * `all` - ALL */
-      readonly trigger: ReviewRunTriggerEnum;
+       * * `self_driving` - Self-driving inbox
+       * * `bot_author` - Bot admitted by policy
+       * * `manual` - Requested
+       * * `label` - Trigger label
+       * * `all` - Every pull request */
+      readonly trigger: ReviewTriggerEnum;
       /** Current stage of the review run's lifecycle.
        *
        * * `queued` - QUEUED
