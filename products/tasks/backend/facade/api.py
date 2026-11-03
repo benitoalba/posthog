@@ -209,13 +209,31 @@ from products.tasks.backend.pr_urls import (
     read_pr_urls as read_pr_urls,
 )
 from products.tasks.backend.prompts import build_wizard_pr_agent_prompt, generate_wizard_head_branch
-from products.tasks.backend.public_create import uses_public_create
+from products.tasks.backend.public_create import (
+    asks_for_run as asks_for_run,
+    create_fields_from_options as create_fields_from_options,
+    idempotent_request as idempotent_request,
+    options_from_request as options_from_request,
+    public_idempotency_key as public_idempotency_key,
+    request_fingerprint as request_fingerprint,
+    uses_public_create as uses_public_create,
+)
 from products.tasks.backend.repository_config_analytics import (
     capture_repository_config_changed,
     capture_space_context_changed,
     repositories_differ,
 )
-from products.tasks.backend.task_profiles import SPACE_SETUP, USER, WIZARD
+from products.tasks.backend.run_options import (
+    run_only_option_names as run_only_option_names,
+    run_options_record as run_options_record,
+    validate_run_options as validate_run_options,
+)
+from products.tasks.backend.task_profiles import (
+    PUBLIC_RUN_OPTIONS as PUBLIC_RUN_OPTIONS,
+    SPACE_SETUP,
+    USER,
+    WIZARD,
+)
 from products.tasks.backend.task_sources import apply_task_source, idempotency_key_q, source_q
 from products.tasks.backend.visibility import (
     PRODUCT_PRIVATE_ORIGIN_PRODUCTS,
@@ -4087,12 +4105,6 @@ def task_source_in_team(team_id: int, source: TaskSource) -> bool:
         return False
     if source.kind == SourceKind.SIGNAL_REPORT:
         return signal_report_queryset().filter(team_id=team_id, pk=source_id).exists()
-    if source.kind == SourceKind.HOG_FLOW:
-        from products.workflows.backend.facade.api import (  # noqa: PLC0415 — cross-product read kept off the api import path
-            workflow_exists,
-        )
-
-        return workflow_exists(team_id=team_id, workflow_id=source_id)
     return False
 
 

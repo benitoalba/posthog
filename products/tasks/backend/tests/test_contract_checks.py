@@ -13,12 +13,13 @@ from products.tasks.backend.facade.profiles import (
     ContractCheck,
     DrivePolicy,
     GithubAccess,
+    RunOptionsCaller,
     TaskProfile,
     TaskRunOptions,
     TaskRunOptionsError,
     get_task_profile,
 )
-from products.tasks.backend.run_options import RunOptionsCaller, validate_run_options
+from products.tasks.backend.run_options import validate_run_options
 
 SERVER = RunOptionsCaller.SERVER
 PUBLIC = RunOptionsCaller.PUBLIC

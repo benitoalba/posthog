@@ -1,6 +1,5 @@
 import json
 from dataclasses import asdict, fields, replace
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -13,6 +12,7 @@ from products.tasks.backend.contract_checks import contract_violation_refused
 from products.tasks.backend.facade.profiles import (
     ContractCheck,
     GithubAccess,
+    RunOptionsCaller,
     TaskProfile,
     TaskRunOptions,
     TaskRunOptionsError,
@@ -20,11 +20,6 @@ from products.tasks.backend.facade.profiles import (
 
 if TYPE_CHECKING:
     from posthog.temporal.oauth import PosthogMcpScopes
-
-
-class RunOptionsCaller(StrEnum):
-    SERVER = "server"
-    PUBLIC = "public"
 
 
 @frozen
