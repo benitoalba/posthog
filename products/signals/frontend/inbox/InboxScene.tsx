@@ -23,6 +23,7 @@ import { InboxOnboardingEntry } from './components/onboarding/InboxOnboardingEnt
 import { ScratchpadPanel } from './components/scratchpad/ScratchpadPanel'
 import { GitHubConnectionNotice } from './components/shell/GitHubConnectionNotice'
 import { InboxTabBar } from './components/shell/InboxTabBar'
+import { InboxTriageButton } from './components/shell/InboxTriageButton'
 import { InboxValueSummary } from './components/shell/InboxValueSummary'
 import { ReportsTab } from './components/tabs/ReportsTab'
 import { RunsTab } from './components/tabs/RunsTab'
@@ -254,6 +255,16 @@ export function InboxScene(): JSX.Element {
         }
     }, [isScratchpadOpen])
 
+    // Each tab's primary action sits in the scene header rather than inside the tab: one predictable
+    // place, and it stays reachable when filters narrow the tab down to nothing. Not while onboarding
+    // has the tab locked (or is still deciding): the tab isn't reachable then.
+    const tabUnlocked = onboardingMode !== 'takeover' && onboardingMode !== 'pending'
+    const headerActions = !tabUnlocked ? undefined : activeTab === 'scouts' ? (
+        <ScoutsRosterActions />
+    ) : activeTab === 'reports' ? (
+        <InboxTriageButton />
+    ) : undefined
+
     return (
         <SceneContent className="gap-y-0 border-b-0 flex-1 min-h-0">
             <div className={showDetail ? 'hidden' : 'flex flex-col gap-y-4 flex-1 min-h-0'}>
@@ -269,15 +280,7 @@ export function InboxScene(): JSX.Element {
                             : INBOX_TAB_DESCRIPTION[activeTab]
                     }
                     resourceType={{ type: 'inbox' }}
-                    // Creating a scout is the Scouts tab's primary action, so it sits in the scene
-                    // header rather than inside the roster — one predictable place, and it stays
-                    // reachable when the roster is filtered down to nothing. Not while onboarding
-                    // has the tab locked (or is still deciding): the roster isn't reachable then.
-                    actions={
-                        activeTab === 'scouts' && onboardingMode !== 'takeover' && onboardingMode !== 'pending' ? (
-                            <ScoutsRosterActions />
-                        ) : undefined
-                    }
+                    actions={headerActions}
                 />
 
                 <div className="flex flex-col -mx-4 -mt-4 flex-1 min-h-0">
