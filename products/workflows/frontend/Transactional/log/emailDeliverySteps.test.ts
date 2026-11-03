@@ -57,7 +57,7 @@ describe('buildDeliverySteps', () => {
             email('complained', ['queued', 'sent', 'delivered', 'complained', 'opened']),
             ['sent:done', 'delivered:done', 'complained:failed'],
         ],
-        ['not sent', email('failed', ['queued', 'failed']), ['queued:done', 'failed:failed']],
+        ['failed', email('failed', ['queued', 'failed']), ['queued:done', 'failed:failed']],
         [
             'sent row arriving after delivered',
             email('delivered', ['queued', 'delivered', 'sent']),

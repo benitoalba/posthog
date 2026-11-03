@@ -11,7 +11,7 @@ export const EMAIL_STATUS_LABEL: Record<EmailLogEventKindEnumApi, string> = {
     delivered: 'Delivered',
     bounced: 'Bounced',
     complained: 'Marked as spam',
-    failed: 'Not sent',
+    failed: 'Failed',
     opened: 'Opened',
     clicked: 'Clicked',
 }
