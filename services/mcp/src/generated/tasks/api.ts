@@ -623,9 +623,9 @@ export const TasksCreateBody = () => zod.object({
         .object({
             kind: zod
                 .enum(['signal_report', 'hog_flow'])
-                .describe('\* `signal_report` - signal_report\n\* `hog_flow` - hog_flow')
+                .describe('\* `signal_report` - Signal Report\n\* `hog_flow` - Hog Flow')
                 .describe(
-                    'The kind of row the task starts from. It must be the kind the profile takes.\n\n\* `signal_report` - signal_report\n\* `hog_flow` - hog_flow'
+                    'The kind of row the task starts from. It must be the kind the profile takes.\n\n\* `signal_report` - Signal Report\n\* `hog_flow` - Hog Flow'
                 ),
             id: zod
                 .string()

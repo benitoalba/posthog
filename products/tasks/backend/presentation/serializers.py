@@ -1176,6 +1176,20 @@ class TaskRunScheduleSerializer(serializers.Serializer):
         return value
 
 
+class PublicReasoningEffort(models.TextChoices):
+    LOW = "low", "low"
+    MEDIUM = "medium", "medium"
+    HIGH = "high", "high"
+    XHIGH = "xhigh", "xhigh"
+    MAX = "max", "max"
+    ULTRACODE = "ultracode", "ultracode"
+
+
+class PublicTaskSourceKind(models.TextChoices):
+    SIGNAL_REPORT = SourceKind.SIGNAL_REPORT.value
+    HOG_FLOW = SourceKind.HOG_FLOW.value
+
+
 class TaskRunOptionsRepositorySerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, help_text="GitHub repository in `organization/repo` format.")
     initial_branch = serializers.CharField(
@@ -1202,7 +1216,7 @@ class TaskRunOptionsRequestSerializer(serializers.Serializer):
     )
     model = serializers.CharField(required=False, help_text="LLM model for the first run.")
     reasoning_effort = serializers.ChoiceField(
-        choices=list(REASONING_EFFORTS),
+        choices=PublicReasoningEffort.choices,
         required=False,
         help_text="Reasoning effort for the first run, for models that support it.",
     )
@@ -1239,7 +1253,7 @@ class TaskRunOptionsRequestSerializer(serializers.Serializer):
 
 class TaskSourceRequestSerializer(serializers.Serializer):
     kind = serializers.ChoiceField(
-        choices=[SourceKind.SIGNAL_REPORT.value, SourceKind.HOG_FLOW.value],
+        choices=PublicTaskSourceKind.choices,
         help_text="The kind of row the task starts from. It must be the kind the profile takes.",
     )
     id = serializers.CharField(max_length=64, help_text="ID of that row. It must belong to the current project.")

@@ -1624,13 +1624,12 @@ export interface TaskRunOptionsRequestApi {
 }
 
 /**
- * * `signal_report` - signal_report
- * * `hog_flow` - hog_flow
+ * * `signal_report` - Signal Report
+ * * `hog_flow` - Hog Flow
  */
-export type TaskSourceRequestKindEnumApi =
-    (typeof TaskSourceRequestKindEnumApi)[keyof typeof TaskSourceRequestKindEnumApi]
+export type PublicTaskSourceKindEnumApi = (typeof PublicTaskSourceKindEnumApi)[keyof typeof PublicTaskSourceKindEnumApi]
 
-export const TaskSourceRequestKindEnumApi = {
+export const PublicTaskSourceKindEnumApi = {
     SignalReport: 'signal_report',
     HogFlow: 'hog_flow',
 } as const
@@ -1638,9 +1637,9 @@ export const TaskSourceRequestKindEnumApi = {
 export interface TaskSourceRequestApi {
     /** The kind of row the task starts from. It must be the kind the profile takes.
      *
-     * * `signal_report` - signal_report
-     * * `hog_flow` - hog_flow */
-    kind: TaskSourceRequestKindEnumApi
+     * * `signal_report` - Signal Report
+     * * `hog_flow` - Hog Flow */
+    kind: PublicTaskSourceKindEnumApi
     /**
      * ID of that row. It must belong to the current project.
      * @maxLength 64

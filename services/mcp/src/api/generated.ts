@@ -100617,6 +100617,18 @@ export namespace Schemas {
     }
 
     /**
+     * * `signal_report` - Signal Report
+     * * `hog_flow` - Hog Flow
+     */
+    export type PublicTaskSourceKindEnum = typeof PublicTaskSourceKindEnum[keyof typeof PublicTaskSourceKindEnum];
+
+
+    export const PublicTaskSourceKindEnum = {
+      SignalReport: 'signal_report',
+      HogFlow: 'hog_flow',
+    } as const;
+
+    /**
      * * `published` - published
      * * `deprecated` - deprecated
      */
@@ -120724,24 +120736,12 @@ export namespace Schemas {
       auto_publish?: boolean;
     }
 
-    /**
-     * * `signal_report` - signal_report
-     * * `hog_flow` - hog_flow
-     */
-    export type TaskSourceRequestKindEnum = typeof TaskSourceRequestKindEnum[keyof typeof TaskSourceRequestKindEnum];
-
-
-    export const TaskSourceRequestKindEnum = {
-      SignalReport: 'signal_report',
-      HogFlow: 'hog_flow',
-    } as const;
-
     export interface TaskSourceRequest {
       /** The kind of row the task starts from. It must be the kind the profile takes.
        *
-       * * `signal_report` - signal_report
-       * * `hog_flow` - hog_flow */
-      kind: TaskSourceRequestKindEnum;
+       * * `signal_report` - Signal Report
+       * * `hog_flow` - Hog Flow */
+      kind: PublicTaskSourceKindEnum;
       /**
          * ID of that row. It must belong to the current project.
          * @maxLength 64

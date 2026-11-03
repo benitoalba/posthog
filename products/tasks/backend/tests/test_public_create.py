@@ -4,7 +4,8 @@ from django.test import SimpleTestCase
 
 from parameterized import parameterized
 
-from products.tasks.backend.presentation.serializers import TaskRunOptionsRequestSerializer
+from products.tasks.backend.facade.run_config import REASONING_EFFORTS
+from products.tasks.backend.presentation.serializers import PublicReasoningEffort, TaskRunOptionsRequestSerializer
 from products.tasks.backend.public_create import (
     create_fields_from_options,
     options_from_request,
@@ -32,6 +33,9 @@ class TestPublicCreateOptions(SimpleTestCase):
     def test_the_endpoint_accepts_exactly_the_public_run_options(self) -> None:
         self.assertEqual(set(TaskRunOptionsRequestSerializer().fields), PUBLIC_RUN_OPTIONS)
         self.assertEqual(set(OPTION_SAMPLES), PUBLIC_RUN_OPTIONS)
+
+    def test_the_endpoint_accepts_every_reasoning_effort_tier(self) -> None:
+        self.assertEqual(PublicReasoningEffort.values, list(REASONING_EFFORTS))
 
     @parameterized.expand([(name, value, expected) for name, (value, expected) in OPTION_SAMPLES.items()])
     def test_each_option_reaches_the_create_fields(self, name: str, value: Any, expected: dict[str, Any]) -> None:
