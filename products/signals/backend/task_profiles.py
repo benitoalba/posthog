@@ -106,7 +106,6 @@ RESEARCH = replace(
     key="signals.research",
     mcp_scopes="signals_research",
     network=NetworkPolicy(levels=(NetworkAccess.TRUSTED,)),
-    create_pr=False,
 )
 
 RESEARCH_WITHOUT_REPORT = replace(RESEARCH, key="signals.research_without_report", source_kind=None)
@@ -116,7 +115,6 @@ REPO_SELECTION = replace(
     key="signals.repo_selection",
     mcp_scopes="read_only",
     network=NetworkPolicy(levels=(NetworkAccess.CUSTOM,), allowed_domains=tuple(GITHUB_ONLY_DOMAINS)),
-    create_pr=False,
 )
 
 REPO_SELECTION_WITHOUT_REPORT = replace(REPO_SELECTION, key="signals.repo_selection_without_report", source_kind=None)
@@ -127,7 +125,6 @@ CUSTOM_AGENT = replace(
     source_kind=None,
     mcp_scopes="read_only",
     network=NetworkPolicy(levels=(NetworkAccess.TRUSTED,)),
-    create_pr=False,
 )
 
 CHAT = replace(
@@ -140,7 +137,6 @@ CHAT = replace(
     read_without_channel=Read.CREATOR,
     drive=DrivePolicy.OWNER,
     warm=None,
-    create_pr=False,
 )
 
 _SCOUT = replace(
@@ -156,7 +152,6 @@ _SCOUT = replace(
     mcp_agent="scout",
     mcp_scopes=SCOUT_MCP_SCOPES,
     github_resolution=GithubResolution.ALWAYS,
-    create_pr=False,
 )
 
 SCOUT = replace(_SCOUT, key="signals.scout")
@@ -185,7 +180,6 @@ SCOUT_SUGGESTIONS = replace(
     network=NetworkPolicy(levels=(NetworkAccess.TRUSTED,)),
     mcp_agent="scout",
     mcp_scopes="read_only",
-    create_pr=False,
 )
 
 SCOUT_TRIAL_JUDGE = replace(

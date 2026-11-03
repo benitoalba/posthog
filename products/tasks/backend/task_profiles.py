@@ -113,14 +113,13 @@ SPACE_SETUP = replace(
     _BASE,
     key="space_setup",
     origin_product="space_setup",
-    create_pr=False,
     idle_minutes=60,
     max_wake_minutes=None,
     bills_compute=True,
 )
 
 IMAGE_BUILDER = replace(
-    _BASE, key="image_builder", origin_product="image_builder", create_pr=False, idle_minutes=60, max_wake_minutes=None
+    _BASE, key="image_builder", origin_product="image_builder", idle_minutes=60, max_wake_minutes=None
 )
 
 TASK_ANALYSIS = replace(
@@ -131,7 +130,6 @@ TASK_ANALYSIS = replace(
     inherit_user_defaults=False,
     personal_mcp=False,
     mcp_scopes="read_only",
-    create_pr=False,
     billing_product="background_agents",
 )
 

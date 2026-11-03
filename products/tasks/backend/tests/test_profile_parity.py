@@ -173,6 +173,10 @@ class TestTaskProfilesMatchMaster(SimpleTestCase):
         self.assertEqual(profile.default_pr_authorship, get_pr_authorship_mode(_task(profile), None))
 
     @parameterized.expand(PROFILES)
+    def test_create_pr_matches_master(self, _key: str, profile: TaskProfile) -> None:
+        self.assertEqual(profile.create_pr, profile.origin_product not in PRODUCT_PRIVATE_ORIGIN_PRODUCTS)
+
+    @parameterized.expand(PROFILES)
     def test_default_runtime_matches_master(self, _key: str, profile: TaskProfile) -> None:
         self.assertEqual(profile.runtimes[0], Task.Runtime.ACP)
 
