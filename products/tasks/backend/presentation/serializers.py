@@ -827,6 +827,12 @@ def normalized_repository_name(value: str) -> str:
     return value.lower()
 
 
+def require_unique_repositories(repositories: list[str]) -> list[str]:
+    if len(set(repositories)) != len(repositories):
+        raise serializers.ValidationError("Repositories must be unique")
+    return repositories
+
+
 class TaskWriteSerializer(serializers.Serializer):
     title = serializers.CharField(
         max_length=255,
@@ -1060,10 +1066,7 @@ class TaskWriteSerializer(serializers.Serializer):
         return normalized_repository_name(value)
 
     def validate_repositories(self, value: list[str]) -> list[str]:
-        repositories = [self.validate_repository(repository) for repository in value]
-        if len(set(repositories)) != len(repositories):
-            raise serializers.ValidationError("Repositories must be unique")
-        return repositories
+        return require_unique_repositories([self.validate_repository(repository) for repository in value])
 
     def validate_signal_report(self, value):
         if value and value.team_id != self.context["team"].id:
@@ -1240,6 +1243,10 @@ class TaskRunOptionsRequestSerializer(serializers.Serializer):
         required=False,
         help_text="When true, the agent pushes its work and opens a draft pull request when it finishes.",
     )
+
+    def validate_repositories(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        require_unique_repositories([repository["name"] for repository in value])
+        return value
 
     def to_internal_value(self, data: Any) -> dict[str, Any]:
         if isinstance(data, dict):

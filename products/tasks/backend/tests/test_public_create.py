@@ -72,6 +72,30 @@ class TestPublicCreateOptions(SimpleTestCase):
         self.assertEqual(create_fields_from_options(options_from_request({})), {})
 
 
+class TestPublicCreateOptionsRequest(SimpleTestCase):
+    @parameterized.expand(
+        [
+            ("distinct_names", [{"name": "posthog/posthog"}, {"name": "posthog/code"}], True),
+            ("same_name", [{"name": "posthog/posthog"}, {"name": "posthog/posthog"}], False),
+            ("names_that_differ_in_case", [{"name": "PostHog/PostHog"}, {"name": "posthog/posthog"}], False),
+            (
+                "same_name_with_other_branches",
+                [{"name": "posthog/posthog", "initial_branch": "main"}, {"name": "posthog/posthog"}],
+                False,
+            ),
+            ("duplicate_after_a_distinct_name", [{"name": "a/b"}, {"name": "c/d"}, {"name": "A/B"}], False),
+        ]
+    )
+    def test_repositories_must_be_unique(self, _name: str, repositories: list[dict[str, str]], valid: bool) -> None:
+        serializer = TaskRunOptionsRequestSerializer(data={"repositories": repositories})
+
+        self.assertEqual(serializer.is_valid(), valid, serializer.errors)
+        if not valid:
+            self.assertEqual(
+                [str(error) for error in serializer.errors["repositories"]], ["Repositories must be unique"]
+            )
+
+
 class TestPublicCreateIdempotency(SimpleTestCase):
     @parameterized.expand(
         [
