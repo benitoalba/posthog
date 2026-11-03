@@ -319,9 +319,12 @@ class TraceReviewQueueAssignment(Contract):
 
 
 class TraceReviewStatus(Contract):
-    review: TraceHumanReview | None = Field(description="The trace's human review, or null when it has none.")
+    review: TraceHumanReview | None = Field(
+        description="The trace's human review, or null when it has none or the user may not see it."
+    )
     queue: TraceReviewQueueAssignment | None = Field(
-        description="The review queue the trace waits in, or null. Saving a review normally takes the trace out of its queue."
+        description="The review queue the trace waits in, or null when it waits in none the user may see. Saving a review "
+        "normally takes the trace out of its queue."
     )
 
 

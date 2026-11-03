@@ -4,8 +4,12 @@ from posthog.test.base import BaseTest
 
 from parameterized import parameterized
 
+from posthog.constants import AvailableFeature
 from posthog.models import Organization, Team
+from posthog.models.organization import OrganizationMembership
+from posthog.models.user import User
 
+from products.access_control.backend.models.access_control import AccessControl
 from products.ai_observability.backend.logic.traces.review import (
     HumanReview,
     QueueAssignment,
@@ -22,7 +26,7 @@ NOTHING = TraceReviewState(review=None, queue=None)
 
 
 class TestLoadTraceReviewState(BaseTest):
-    def _score(self, review: TraceReview, *, name: str, kind: str, config: dict, **value: object) -> None:
+    def _score(self, review: TraceReview, *, name: str, kind: str, config: dict[str, object], **value: object) -> None:
         definition = ScoreDefinition.objects.create(team=self.team, name=name, kind=kind, created_by=self.user)
         version = definition.create_new_version(config=config, created_by=self.user)
         TraceReviewScore.objects.create(
@@ -68,7 +72,7 @@ class TestLoadTraceReviewState(BaseTest):
         review.refresh_from_db()
         assert review.updated_at is not None
 
-        assert load_trace_review_state(self.team.id, TRACE_ID) == TraceReviewState(
+        assert load_trace_review_state(self.team, self.user, TRACE_ID) == TraceReviewState(
             review=HumanReview(
                 reviewed_by="Ada",
                 reviewed_at=review.updated_at,
@@ -79,14 +83,14 @@ class TestLoadTraceReviewState(BaseTest):
         )
 
     def test_nothing_for_an_unknown_trace(self) -> None:
-        assert load_trace_review_state(self.team.id, "unknown") == NOTHING
+        assert load_trace_review_state(self.team, self.user, "unknown") == NOTHING
 
     def test_reviewer_removed(self) -> None:
         review = self._review()
         review.reviewed_by = None
         review.save()
 
-        state = load_trace_review_state(self.team.id, TRACE_ID)
+        state = load_trace_review_state(self.team, self.user, TRACE_ID)
 
         assert state.review is not None and state.review.reviewed_by is None
 
@@ -103,4 +107,26 @@ class TestLoadTraceReviewState(BaseTest):
             self._review(team=other_team)
             self._queue_item(team=other_team)
 
-        assert load_trace_review_state(self.team.id, TRACE_ID) == NOTHING
+        assert load_trace_review_state(self.team, self.user, TRACE_ID) == NOTHING
+
+    @parameterized.expand(["review", "queue"])
+    def test_hides_what_the_viewer_may_not_see(self, blocked: str) -> None:
+        self.organization.available_product_features = [
+            {"key": AvailableFeature.ACCESS_CONTROL, "name": AvailableFeature.ACCESS_CONTROL},
+            {"key": AvailableFeature.ROLE_BASED_ACCESS, "name": AvailableFeature.ROLE_BASED_ACCESS},
+        ]
+        self.organization.save()
+        review = self._review()
+        item = self._queue_item()
+        member = User.objects.create_and_join(self.organization, "member@example.com", "testtest")
+        AccessControl.objects.create(
+            team=self.team,
+            resource="llm_analytics",
+            resource_id=str(review.id) if blocked == "review" else str(item.queue_id),
+            access_level="none",
+            organization_member=OrganizationMembership.objects.get(user=member, organization=self.organization),
+        )
+
+        state = load_trace_review_state(self.team, member, TRACE_ID)
+
+        assert (state.review is None, state.queue is None) == (blocked == "review", blocked == "queue")

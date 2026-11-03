@@ -389,9 +389,10 @@ def get_trace_feedback(
     )
 
 
-def get_trace_review_status(team: Team, trace_id: str) -> contracts.TraceReviewStatus:
-    """The trace's human review and the review queue it waits in. An unknown trace has neither."""
-    state = load_trace_review_state(team.id, trace_id)
+def get_trace_review_status(team: Team, user: User, trace_id: str) -> contracts.TraceReviewStatus:
+    """The trace's human review and the review queue it waits in, as far as the user may see them. An unknown trace
+    has neither."""
+    state = load_trace_review_state(team, user, trace_id)
     return contracts.TraceReviewStatus(
         review=_to_human_review(state.review) if state.review else None,
         queue=_to_review_queue_assignment(state.queue) if state.queue else None,

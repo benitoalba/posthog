@@ -280,7 +280,9 @@ class TraceViewSet(TeamAndOrgViewSetMixin, viewsets.ViewSet):
             trace_id = decode_trace_id_segment(pk)
         except MalformedTraceIdSegmentError:
             return Response({"detail": "Malformed encoded trace id."}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(api.get_trace_review_status(self.team, trace_id).model_dump(mode="json", by_alias=True))
+        return Response(
+            api.get_trace_review_status(self.team, _user(request), trace_id).model_dump(mode="json", by_alias=True)
+        )
 
     @validated_request(
         query_serializer=TraceSearchQuerySerializer,

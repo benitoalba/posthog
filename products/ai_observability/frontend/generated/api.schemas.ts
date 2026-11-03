@@ -1819,9 +1819,9 @@ export interface TraceReviewQueueAssignmentApi {
 }
 
 export interface TraceReviewStatusApi {
-    /** The trace's human review, or null when it has none. */
+    /** The trace's human review, or null when it has none or the user may not see it. */
     review: TraceHumanReviewApi | null
-    /** The review queue the trace waits in, or null. Saving a review normally takes the trace out of its queue. */
+    /** The review queue the trace waits in, or null when it waits in none the user may see. Saving a review normally takes the trace out of its queue. */
     queue: TraceReviewQueueAssignmentApi | null
 }
 
