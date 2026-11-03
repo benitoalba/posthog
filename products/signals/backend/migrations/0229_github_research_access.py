@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("signals", "0227_personalinboxranking_checked_at"),
+        ("signals", "0228_useractivitysummaryqueuestate_pending_mcp_score"),
     ]
 
     operations = [
