@@ -83,6 +83,12 @@ class ParsedPushTokenFile:
     duplicate_lines: int
 
 
+@frozen
+class _Columns:
+    distinct_id: int
+    device_token: int
+
+
 class _DeviceCipher(EncryptedFieldMixin):
     pass
 
@@ -97,7 +103,7 @@ def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
     seen: set[tuple[str, str]] = set()
     duplicate_lines = 0
     has_data = False
-    distinct_id_column = device_token_column = -1
+    columns: _Columns | None = None
     try:
         for cells in reader:
             # A quoted value can span lines, so the record's line is where it started.
@@ -107,14 +113,14 @@ def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
                     f"This file has more than {MAX_FILE_LINES:,} lines. "
                     "Split it into smaller files and import them one at a time."
                 )
-            if distinct_id_column < 0:
-                distinct_id_column, device_token_column = _columns(cells)
+            if columns is None:
+                columns = _columns(cells)
                 continue
             if all(not cell.strip() for cell in cells):
                 continue
             has_data = True
-            distinct_id = _cell(cells, distinct_id_column)
-            device_token = _cell(cells, device_token_column)
+            distinct_id = _cell(cells, columns.distinct_id)
+            device_token = _cell(cells, columns.device_token)
             if problem := _row_problem(distinct_id, device_token):
                 rejected_lines += 1
                 if len(rejected) < MAX_STORED_FAILURES:
@@ -138,7 +144,7 @@ def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
         raise PushTokenImportInvalid('This file isn\'t saved as UTF-8. Save it as "CSV UTF-8" and upload it again.')
     except csv.Error as error:
         raise PushTokenImportInvalid(f"Line {reader.line_num} of the file can't be read: {error}.")
-    if distinct_id_column < 0:
+    if columns is None:
         raise PushTokenImportInvalid("The file is empty.")
     if not has_data:
         raise PushTokenImportInvalid("The file has no devices in it, only the column names.")
@@ -147,13 +153,13 @@ def parse_push_token_csv(content: bytes) -> ParsedPushTokenFile:
     )
 
 
-def _columns(header: list[str]) -> tuple[int, int]:
+def _columns(header: list[str]) -> _Columns:
     columns = [cell.strip().lower() for cell in header]
     if _DISTINCT_ID_COLUMN not in columns or _DEVICE_TOKEN_COLUMN not in columns:
         raise PushTokenImportInvalid(
             "The first line of the file must name the columns, and it needs a distinct_id column and a device_token column."
         )
-    return columns.index(_DISTINCT_ID_COLUMN), columns.index(_DEVICE_TOKEN_COLUMN)
+    return _Columns(distinct_id=columns.index(_DISTINCT_ID_COLUMN), device_token=columns.index(_DEVICE_TOKEN_COLUMN))
 
 
 def start_push_token_import(
