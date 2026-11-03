@@ -189,14 +189,12 @@ export const transactionalEmailLogLogic = kea<transactionalEmailLogLogicType>([
         setPage: () => actions.loadEmails(),
         refresh: () => actions.loadEmails({ fresh: true }),
     })),
+    // A search can be a recipient's address, and pageviews record the URL, so the search stays out of it.
     actionToUrl(({ values }) => {
         const toUrl = (): [string, Record<string, any>, Record<string, any>, { replace: boolean }] => {
-            const { search, status, workflowId, dateFrom, dateTo, page } = values.filters
+            const { status, workflowId, dateFrom, dateTo, page } = values.filters
             const searchParams: Record<string, any> = { ...router.values.searchParams }
             URL_PARAMS.forEach((key) => delete searchParams[key])
-            if (search.trim()) {
-                searchParams.search = search
-            }
             if (status) {
                 searchParams.status = status
             }
@@ -220,7 +218,7 @@ export const transactionalEmailLogLogic = kea<transactionalEmailLogLogicType>([
         '/transactional/log': (_, searchParams) => {
             const page = Number(searchParams.page)
             const filters: TransactionalEmailLogFilters = {
-                search: searchParams.search ? String(searchParams.search) : '',
+                search: values.filters.search,
                 status: (searchParams.status as EmailDeliveryStatusEnumApi | undefined) ?? null,
                 workflowId: searchParams.email ? String(searchParams.email) : null,
                 dateFrom: searchParams.date_from ? String(searchParams.date_from) : DEFAULT_LOG_FILTERS.dateFrom,
