@@ -69,9 +69,11 @@ from products.tasks.backend.facade import (
     contracts as tasks_contracts,
 )
 from products.tasks.backend.facade.profiles import (
+    ContractCheck,
     GithubResolution,
     NetworkAccess,
     NetworkPolicy,
+    SourceKind,
     TaskProfile,
     get_task_profile,
 )
@@ -2899,6 +2901,7 @@ class TestTaskAPI(BaseTaskAPITest):
 
         task = Task.objects.get(id=data["id"])
         self.assertEqual(task.origin_product, Task.OriginProduct.USER_CREATED)
+        self.assertEqual((task.profile, task.options, task.idempotency_key), (None, None, None))
 
     def test_create_task_with_hogdesk_origin_product(self):
         # HogDesk creates Code tasks from a support ticket's Code chat with this
@@ -6948,6 +6951,309 @@ class TestTaskAPI(BaseTaskAPITest):
 
         returned_ids = [t["id"] for t in data["results"]]
         self.assertIn(str(needle.id), returned_ids)
+
+
+PUBLIC_PROFILE = replace(
+    BUSINESS_KNOWLEDGE,
+    key="test.public",
+    origin_product="user_created",
+    public=True,
+    public_options=frozenset({"runtime", "model", "output_schema", "repositories"}),
+    listed=True,
+    api_visible=True,
+    runtimes=("acp", "pi"),
+)
+PRIVATE_PROFILE = replace(PUBLIC_PROFILE, key="test.private", public=False)
+RESERVED_ORIGIN_PROFILE = replace(PUBLIC_PROFILE, key="test.reserved", origin_product="slack")
+ACP_ONLY_PROFILE = replace(PUBLIC_PROFILE, key="test.acp_only", runtimes=("acp",))
+ACP_ONLY_ENFORCED_PROFILE = replace(
+    ACP_ONLY_PROFILE, key="test.acp_only_enforced", enforced_checks=frozenset({ContractCheck.RUNTIMES})
+)
+REPORT_PROFILE = replace(PUBLIC_PROFILE, key="test.report", source_kind=SourceKind.SIGNAL_REPORT)
+TEST_PUBLIC_PROFILES = {
+    profile.key: profile
+    for profile in (
+        PUBLIC_PROFILE,
+        PRIVATE_PROFILE,
+        RESERVED_ORIGIN_PROFILE,
+        ACP_ONLY_PROFILE,
+        ACP_ONLY_ENFORCED_PROFILE,
+        REPORT_PROFILE,
+    )
+}
+UNKNOWN_SOURCE_ID = str(uuid.uuid4())
+
+
+class TestTaskPublicCreateAPI(BaseTaskAPITest):
+    def setUp(self) -> None:
+        super().setUp()
+        profiles = patch.dict("products.tasks.backend.facade.profiles._profiles", TEST_PUBLIC_PROFILES)
+        profiles.start()
+        self.addCleanup(profiles.stop)
+
+    def _create(self, **payload: Any) -> Any:
+        return self.client.post(
+            "/api/projects/@current/tasks/",
+            {"title": "Public task", "description": "Do the work", **payload},
+            format="json",
+        )
+
+    @parameterized.expand(
+        [
+            ("profile_only", {"profile": "test.public"}, Task.Runtime.ACP, None),
+            (
+                "options",
+                {"profile": "test.public", "options": {"runtime": "pi", "output_schema": {"type": "object"}}},
+                Task.Runtime.PI,
+                {"type": "object"},
+            ),
+            (
+                "origin_matching_the_profile",
+                {"profile": "test.public", "origin_product": "user_created"},
+                Task.Runtime.ACP,
+                None,
+            ),
+            (
+                "runtime_outside_the_profile_in_log_mode",
+                {"profile": "test.acp_only", "options": {"runtime": "pi"}},
+                Task.Runtime.PI,
+                None,
+            ),
+        ]
+    )
+    def test_create_with_a_public_profile_stores_the_profile_and_options(
+        self, _name: str, payload: dict[str, Any], runtime: Task.Runtime, json_schema: dict | None
+    ) -> None:
+        response = self._create(**payload)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
+        task = Task.objects.get(id=response.json()["id"])
+        self.assertEqual(
+            (task.profile, task.origin_product, task.internal, task.runtime, task.json_schema),
+            (payload["profile"], "user_created", False, runtime, json_schema),
+        )
+        self.assertEqual(task.options is None, "options" not in payload)
+
+    def test_options_repositories_apply_like_the_top_level_field(self) -> None:
+        integration = Integration.objects.create(
+            team=self.team,
+            kind="github",
+            integration_id="123",
+            repository_cache=[{"id": 1, "name": "posthog", "full_name": "posthog/posthog"}],
+            repository_cache_updated_at=django_timezone.now(),
+        )
+
+        response = self._create(
+            profile="test.public",
+            github_integration=integration.id,
+            options={"repositories": [{"name": "PostHog/PostHog", "initial_branch": "main"}]},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
+        task = Task.objects.get(id=response.json()["id"])
+        self.assertEqual(task.repositories, ["posthog/posthog"])
+        self.assertEqual(
+            (task.options or {}).get("repositories"), [{"name": "posthog/posthog", "initial_branch": "main"}]
+        )
+
+    @patch("products.tasks.backend.presentation.views.api._is_internal_debug_team", return_value=True)
+    @patch("products.tasks.backend.temporal.client.execute_task_processing_workflow")
+    def test_create_with_a_public_profile_can_start_the_first_run(self, _mock_workflow, _mock_internal_team) -> None:
+        response = self._create(
+            profile="test.public", start_run=True, options={"model": "claude-sonnet-5", "runtime": "acp"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
+        task = Task.objects.get(id=response.json()["id"])
+        self.assertEqual(task.profile, "test.public")
+        self.assertEqual(task.runs.get().state["model"], "claude-sonnet-5")
+
+    @parameterized.expand(
+        [
+            ("unknown_profile", {"profile": "test.unknown"}, "profile"),
+            ("profile_that_is_not_public", {"profile": "test.private"}, "profile"),
+            ("profile_on_a_reserved_origin", {"profile": "test.reserved"}, "profile"),
+            (
+                "origin_that_does_not_match",
+                {"profile": "test.public", "origin_product": "error_tracking"},
+                "origin_product",
+            ),
+            ("options_without_a_profile", {"options": {"model": "claude-sonnet-5"}}, "options"),
+            ("source_without_a_profile", {"source": {"kind": "signal_report", "id": UNKNOWN_SOURCE_ID}}, "source"),
+            ("key_without_a_profile", {"idempotency_key": "abc"}, "idempotency_key"),
+            (
+                "option_outside_the_public_options",
+                {"profile": "test.public", "options": {"auto_publish": True}},
+                "options",
+            ),
+            (
+                "some_options_outside_the_public_options",
+                {"profile": "test.public", "options": {"runtime": "pi", "auto_publish": True}},
+                "options",
+            ),
+            (
+                "option_the_endpoint_does_not_take",
+                {"profile": "test.public", "options": {"idle_minutes": 5}},
+                "options__idle_minutes",
+            ),
+            (
+                "option_repeated_at_the_top_level",
+                {"profile": "test.public", "runtime": "pi", "options": {"runtime": "pi"}},
+                "options",
+            ),
+            (
+                "repositories_repeated_at_the_top_level",
+                {
+                    "profile": "test.public",
+                    "repository": "posthog/posthog",
+                    "options": {"repositories": [{"name": "posthog/code"}]},
+                },
+                "options",
+            ),
+            (
+                "runtime_outside_the_profile_when_enforced",
+                {"profile": "test.acp_only_enforced", "options": {"runtime": "pi"}},
+                "options",
+            ),
+            (
+                "source_the_profile_does_not_take",
+                {"profile": "test.public", "source": {"kind": "hog_flow", "id": UNKNOWN_SOURCE_ID}},
+                "source",
+            ),
+            ("source_the_profile_needs", {"profile": "test.report"}, "source"),
+            (
+                "source_of_another_kind",
+                {"profile": "test.report", "source": {"kind": "hog_flow", "id": UNKNOWN_SOURCE_ID}},
+                "source",
+            ),
+            (
+                "source_that_does_not_exist",
+                {"profile": "test.report", "source": {"kind": "signal_report", "id": UNKNOWN_SOURCE_ID}},
+                "source",
+            ),
+            (
+                "source_with_a_malformed_id",
+                {"profile": "test.report", "source": {"kind": "signal_report", "id": "not-an-id"}},
+                "source",
+            ),
+        ]
+    )
+    def test_create_refuses_a_request_the_profile_does_not_allow(
+        self, _name: str, payload: dict[str, Any], attr: str
+    ) -> None:
+        response = self._create(**payload)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.json())
+        self.assertEqual(response.json()["attr"], attr)
+        self.assertFalse(Task.objects.filter(team=self.team).exists())
+
+    @parameterized.expand(
+        [("in_this_team", False, status.HTTP_201_CREATED), ("in_another_team", True, status.HTTP_400_BAD_REQUEST)]
+    )
+    def test_create_checks_that_the_source_belongs_to_the_team(
+        self, _name: str, other_team: bool, expected: int
+    ) -> None:
+        from products.signals.backend.models import SignalReport
+
+        owner = Team.objects.create(organization=self.organization, name="Other team") if other_team else self.team
+        report = SignalReport.objects.create(team=owner)
+
+        response = self._create(profile="test.report", source={"kind": "signal_report", "id": str(report.id)})
+
+        self.assertEqual(response.status_code, expected, response.json())
+        if expected == status.HTTP_201_CREATED:
+            task = Task.objects.get(id=response.json()["id"])
+            self.assertEqual(
+                (task.source_kind, task.source_id, task.signal_report_id), ("signal_report", str(report.id), report.id)
+            )
+
+    def test_create_refuses_a_source_beside_a_signal_report(self) -> None:
+        from products.signals.backend.models import SignalReport
+
+        report = SignalReport.objects.create(team=self.team)
+
+        response = self._create(
+            profile="test.report",
+            signal_report=str(report.id),
+            source={"kind": "signal_report", "id": str(report.id)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.json())
+        self.assertEqual(response.json()["attr"], "source")
+        self.assertFalse(Task.objects.filter(team=self.team).exists())
+
+    def test_repeating_a_create_returns_the_first_task(self) -> None:
+        first = self._create(profile="test.public", idempotency_key="retry-1", options={"runtime": "pi"})
+        second = self._create(profile="test.public", idempotency_key="retry-1", options={"runtime": "pi"})
+
+        self.assertEqual((first.status_code, second.status_code), (status.HTTP_201_CREATED, status.HTTP_200_OK))
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(Task.objects.filter(team=self.team).count(), 1)
+
+    @parameterized.expand(
+        [
+            ("different_title", {"title": "Another title"}),
+            ("different_options", {"options": {"runtime": "acp"}}),
+            ("options_added", {"options": {"runtime": "pi", "model": "claude-sonnet-5"}}),
+        ]
+    )
+    def test_reusing_a_key_with_a_different_body_is_refused(self, _name: str, changes: dict[str, Any]) -> None:
+        first = self._create(profile="test.public", idempotency_key="retry-2", options={"runtime": "pi"})
+
+        second = self._create(
+            profile="test.public", idempotency_key="retry-2", **{"options": {"runtime": "pi"}, **changes}
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(second.json()["code"], "idempotency_key_reused")
+        self.assertEqual(Task.objects.filter(team=self.team).count(), 1)
+
+    def test_reusing_a_key_after_the_task_was_deleted_is_refused(self) -> None:
+        first = self._create(profile="test.public", idempotency_key="retry-3")
+        Task.objects.get(id=first.json()["id"]).soft_delete()
+
+        second = self._create(profile="test.public", idempotency_key="retry-3")
+
+        self.assertEqual(second.status_code, status.HTTP_409_CONFLICT)
+
+    def test_keys_belong_to_the_user_who_sent_them(self) -> None:
+        first = self._create(profile="test.public", idempotency_key="shared")
+        self.client.force_authenticate(self.create_organization_user())
+
+        second = self._create(profile="test.public", idempotency_key="shared")
+
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertNotEqual(first.json()["id"], second.json()["id"])
+
+    def test_a_key_cannot_reach_a_task_a_server_created(self) -> None:
+        server_task = Task.objects.create(
+            team=self.team,
+            title="Server task",
+            origin_product=Task.OriginProduct.SIGNAL_REPORT,
+            origin_key="server-key",
+            idempotency_key="server-key",
+        )
+
+        response = self._create(profile="test.public", idempotency_key="server-key")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotEqual(response.json()["id"], str(server_task.id))
+
+    def test_a_create_that_loses_a_race_for_its_key_returns_the_winner(self) -> None:
+        first = self._create(profile="test.public", idempotency_key="race")
+        find = tasks_facade.find_task_for_idempotency_key
+        lookups: list[int] = []
+
+        def miss_the_first_lookup(*args: Any, **kwargs: Any) -> Any:
+            lookups.append(1)
+            return None if len(lookups) == 1 else find(*args, **kwargs)
+
+        with patch.object(tasks_facade, "find_task_for_idempotency_key", side_effect=miss_the_first_lookup):
+            second = self._create(profile="test.public", idempotency_key="race")
+
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.json()["id"], first.json()["id"])
 
 
 class TestTaskRepositoriesAction(BaseTaskAPITest):
