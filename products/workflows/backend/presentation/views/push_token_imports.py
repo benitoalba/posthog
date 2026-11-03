@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from posthog.api.mixins import ValidatedRequest, validated_request
 from posthog.api.routing import TeamAndOrgViewSetMixin
 from posthog.models.user import User
-from posthog.permissions import TeamMemberStrictManagementPermission
+from posthog.permissions import TeamMemberAdminManagementPermission
+from posthog.rate_limit import PushTokenImportThrottle
 
 from products.workflows.backend.facade.enums import PushTokenImportRowFailureReason, PushTokenImportStatus
 from products.workflows.backend.facade.push_token_import import (
@@ -101,10 +102,28 @@ class PushTokenImportViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
     scope_object = "integration"
     scope_object_read_actions = ["retrieve", "latest"]
     scope_object_write_actions = ["create", "cancel", "import_unknown_persons"]
-    # Importing devices changes a push channel, which only project admins can do.
-    permission_classes = [TeamMemberStrictManagementPermission]
+    # Imports change push channels and list people's distinct IDs, so only project admins see them.
+    permission_classes = [TeamMemberAdminManagementPermission]
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = PushTokenImportSerializer
+
+    def dangerously_get_required_scopes(self, request: Request, view: Any) -> list[str] | None:
+        # An import writes person properties and tells which distinct IDs have a person.
+        if self.action in self.scope_object_write_actions:
+            return ["integration:write", "person:write"]
+        return ["integration:read", "person:read"]
+
+    def initial(self, request: Request, *args: Any, **kwargs: Any) -> None:
+        super().initial(request, *args, **kwargs)
+        # Session users skip API scopes, and access control checks only the integration scope_object.
+        level = "editor" if self.action in self.scope_object_write_actions else "viewer"
+        if not self.user_access_control.check_access_level_for_resource("person", level):
+            raise exceptions.PermissionDenied("You need access to persons to import push devices.")
+
+    def get_throttles(self) -> list[Any]:
+        if self.action in ("create", "import_unknown_persons"):
+            return [PushTokenImportThrottle(), *super().get_throttles()]
+        return super().get_throttles()
 
     @extend_schema(
         request=PushTokenImportCreateSerializer,

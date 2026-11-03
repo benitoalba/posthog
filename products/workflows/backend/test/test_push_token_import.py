@@ -14,9 +14,11 @@ from parameterized import parameterized
 from rest_framework import status
 
 from posthog.api.capture import CaptureInternalResult
+from posthog.models import PersonalAPIKey
 from posthog.models.integration import Integration
 from posthog.models.organization import OrganizationMembership
 from posthog.models.team import Team
+from posthog.models.utils import generate_random_token_personal, hash_key_value
 
 from products.workflows.backend.facade.contracts import PushTokenImportInvalid
 from products.workflows.backend.models.push_token_import import PushTokenImport
@@ -52,6 +54,7 @@ class TestParsePushTokenCsv(SimpleTestCase):
             ("only_header", b"distinct_id,device_token\n\n , \n", "only the column names"),
             ("empty", b"", "The file is empty"),
             ("broken_quotes", b'distinct_id,device_token\n"user-1,abc\n', "can't be read"),
+            ("too_many_lines", b"distinct_id,device_token\nuser-1,abc" + b"\n" * 400_001, "more than 400,000 lines"),
         ]
     )
     def test_rejects_a_file_it_cannot_use(self, _name: str, content: bytes, message: str) -> None:
@@ -68,6 +71,7 @@ class TestParsePushTokenCsv(SimpleTestCase):
             "No id,,tok-3\n"
             f"Long,user-4,{'x' * 4097}\n"
             "Ünï 🎉,user-🎉,tok-5\n"
+            "Nul,,tok\x00\n"
         ).encode()
 
         parsed = parse_push_token_csv(content)
@@ -80,6 +84,7 @@ class TestParsePushTokenCsv(SimpleTestCase):
         assert [(failure.line, failure.detail) for failure in parsed.rejected] == [
             (7, "No distinct ID"),
             (8, "Device token is longer than 4096 characters"),
+            (10, "The line has a NUL character in it"),
         ]
         assert parsed.duplicate_lines == 1
 
@@ -108,6 +113,7 @@ class TestPushTokenImportJob(APIBaseTest):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.captured: list[list[dict[str, Any]]] = []
+        self.drop_once: set[str] = set()
         capture = patch("posthog.api.integration_push_tokens.capture_batch_internal", side_effect=self._capture)
         capture.start()
         self.addCleanup(capture.stop)
@@ -115,7 +121,10 @@ class TestPushTokenImportJob(APIBaseTest):
     def _capture(self, *, events: list[dict[str, Any]], **kwargs: Any) -> CaptureInternalResult:
         self.captured.append(events)
         result = CaptureInternalResult(status_code=200)
-        result.ok.extend(event["event_uuid"] for event in events)
+        for event in events:
+            dropped = event["distinct_id"] in self.drop_once
+            self.drop_once.discard(event["distinct_id"])
+            (result.dropped if dropped else result.ok).append(event["event_uuid"])
         return result
 
     def _upload(self, lines: list[str], integration_id: int | None = None, **data: Any):
@@ -226,6 +235,30 @@ class TestPushTokenImportJob(APIBaseTest):
         assert result["finished_at"] is not None
         assert self.storage.objects == {}
 
+    @patch.object(push_token_import.time, "sleep")
+    def test_a_device_ingestion_did_not_store_is_sent_again_with_its_event_id(self, _sleep: Any) -> None:
+        self.drop_once = {"b"}
+        import_id = self._upload([f"a,{APNS_TOKEN}", f"b,{APNS_TOKEN}"], create_missing_persons=True).json()["id"]
+
+        result = self._run_to_end(import_id)
+
+        assert (result["imported_devices"], result["failed_devices"]) == (2, 0)
+        assert [event["distinct_id"] for event in self.captured[1]] == ["b"]
+        assert self.captured[1][0]["event_uuid"] == self.captured[0][1]["event_uuid"]
+
+    def test_a_failed_delete_keeps_the_devices_known_so_cleanup_runs_again(self) -> None:
+        import_id = self._upload([f"a,{APNS_TOKEN}"], create_missing_persons=True).json()["id"]
+        with (
+            patch.object(self.storage, "delete", side_effect=RuntimeError("storage down")),
+            patch(
+                "products.workflows.backend.tasks.push_token_import.expire_push_token_import_devices.apply_async"
+            ) as retry_cleanup,
+        ):
+            self._run_to_end(import_id)
+
+        assert PushTokenImport.objects.for_team(self.team.id).get(id=import_id).storage_key != ""
+        retry_cleanup.assert_called_once()
+
     def test_a_batch_sent_again_after_a_crash_reuses_its_event_ids(self) -> None:
         lines = [f"a,{APNS_TOKEN}", f"b,{APNS_TOKEN}", f"c,{APNS_TOKEN}"]
         import_id = self._upload(lines, create_missing_persons=True).json()["id"]
@@ -254,6 +287,29 @@ class TestPushTokenImportJob(APIBaseTest):
         assert job.status == "failed"
         assert "stopped after 0 of 1 devices" in job.error
         assert self.storage.objects == {}
+
+    @parameterized.expand(
+        [
+            (["integration:write"], status.HTTP_403_FORBIDDEN),
+            (["integration:write", "person:write"], status.HTTP_201_CREATED),
+        ]
+    )
+    def test_an_api_key_needs_person_access_to_import(self, scopes: list[str], expected: int) -> None:
+        token = generate_random_token_personal()
+        PersonalAPIKey.objects.create(label="t", user=self.user, secure_value=hash_key_value(token), scopes=scopes)
+        self.client.logout()
+
+        response = self.client.post(
+            f"/api/projects/{self.team.pk}/push_token_imports/",
+            {
+                "integration_id": self.apns.id,
+                "file": SimpleUploadedFile("d.csv", f"distinct_id,device_token\na,{APNS_TOKEN}".encode()),
+            },
+            format="multipart",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        assert response.status_code == expected, response.json()
 
     @parameterized.expand(
         [

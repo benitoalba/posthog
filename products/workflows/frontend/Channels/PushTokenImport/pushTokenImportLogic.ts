@@ -276,6 +276,10 @@ export const pushTokenImportLogic = kea<pushTokenImportLogicType>([
                     integration_id: integration.id,
                     file,
                 })
+                // The dialog moved to another channel while the file uploaded.
+                if (values.integration?.id !== integration.id) {
+                    return
+                }
                 // pinned: analytics event name - renaming breaks dashboards
                 posthog.capture('workflows push token import started', {
                     channel_kind: integration.kind,
@@ -296,6 +300,9 @@ export const pushTokenImportLogic = kea<pushTokenImportLogicType>([
             }
             try {
                 const job = await pushTokenImportsImportUnknownPersonsCreate(String(currentProjectId), currentImport.id)
+                if (values.integration?.id !== integration.id) {
+                    return
+                }
                 // pinned: analytics event name - renaming breaks dashboards
                 posthog.capture('workflows push token import started', {
                     channel_kind: integration.kind,
@@ -332,8 +339,13 @@ export const pushTokenImportLogic = kea<pushTokenImportLogicType>([
             let job = currentImport
             try {
                 job = await pushTokenImportsRetrieve(String(currentProjectId), currentImport.id)
-            } catch {
-                // A failed read is retried on the next poll. The import keeps running on the server.
+            } catch (error: any) {
+                // Without access the import can't be followed, so polling stops instead of repeating the error.
+                if (error?.status === 403 || error?.status === 404) {
+                    actions.requestFailed(errorMessage(error, "Couldn't read the import."))
+                    return
+                }
+                // Any other failed read is retried on the next poll. The import keeps running on the server.
             }
             breakpoint()
             if (values.currentImport?.id !== job.id) {

@@ -60,7 +60,11 @@ export function PushTokenImportModal(): JSX.Element {
         </>
     ) : (
         <>
-            <LemonButton type="secondary" onClick={closeImport}>
+            <LemonButton
+                type="secondary"
+                onClick={closeImport}
+                disabledReason={submitting ? 'Uploading the file' : null}
+            >
                 Cancel
             </LemonButton>
             <LemonButton
