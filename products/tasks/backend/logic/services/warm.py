@@ -14,14 +14,18 @@ quota gate before it can warm.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from datetime import timedelta
+from typing import Any, Literal
 from uuid import UUID
 
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 
 import structlog
 from rest_framework.exceptions import PermissionDenied, Throttled
 
+from posthog.dataclasses import frozen
 from posthog.exceptions import QuotaLimitExceeded
 from posthog.models.team import Team
 from posthog.models.user import User
@@ -29,7 +33,8 @@ from posthog.models.user import User
 from products.tasks.backend.access import get_posthog_ai_access_decision
 from products.tasks.backend.logic.services.compute_quota import organization_deactivated
 from products.tasks.backend.logic.services.workflow_dispatch import WorkflowDispatchOptions, enqueue_or_start_workflow
-from products.tasks.backend.models import Task, TaskRun
+from products.tasks.backend.metrics import observe_warm_churn_throttled
+from products.tasks.backend.models import SandboxSession, Task, TaskRun
 from products.tasks.backend.temporal.client import execute_task_processing_workflow
 from products.tasks.backend.temporal.process_task.utils import parse_run_state
 
@@ -54,6 +59,15 @@ class WarmSourceChanged(Exception):
 class WarmPoolCaps:
     per_user: int
     per_org: int
+
+
+@frozen
+class ActiveSessionCaps:
+    per_user: int
+    per_org: int
+
+
+ActiveSessionCapScope = Literal["user", "org"]
 
 
 def _ai_credits_checker(team: Team, user: User) -> None:
@@ -101,6 +115,14 @@ class SandboxWarmer:
     }
     _DEFAULT_CAPS: WarmPoolCaps = WarmPoolCaps(per_user=2, per_org=10)
 
+    ORIGIN_ACTIVE_SESSION_CAPS: dict[str, ActiveSessionCaps] = {
+        Task.OriginProduct.POSTHOG_AI: ActiveSessionCaps(per_user=2, per_org=10),
+        Task.OriginProduct.USER_CREATED: ActiveSessionCaps(per_user=10, per_org=100),
+        Task.OriginProduct.SIGNAL_REPORT: ActiveSessionCaps(per_user=10, per_org=100),
+    }
+
+    WARM_CHURN_LIMIT_PER_HOUR: int = 5
+
     def __init__(self, task: "Task", *, user: User) -> None:
         self.task = task
         self.user = user
@@ -144,6 +166,71 @@ class SandboxWarmer:
             return True
         return warm_runs.filter(task__team__organization_id=team.organization_id).count() >= caps.per_org
 
+    @classmethod
+    def active_session_cap_hit(
+        cls,
+        origin_product: str,
+        *,
+        organization_id: UUID | str,
+        created_by_id: int | None,
+        exclude_run_id: str | UUID | None = None,
+    ) -> ActiveSessionCapScope | None:
+        caps = cls.ORIGIN_ACTIVE_SESSION_CAPS.get(origin_product)
+        if caps is None:
+            return None
+        open_sessions = (
+            SandboxSession.objects.unscoped()
+            .filter(origin_product=origin_product, ended_at__isnull=True, user_attributed_at__isnull=False)
+            .filter(
+                # The provider kills a Modal box at its TTL even when the close stamp never lands, so a
+                # stale row must not lock anyone out. Hogland's TTL is an idle timeout that proxied
+                # requests extend without touching the row, so a hogland row counts while its run is live.
+                Q(ttl_expires_at__gt=timezone.now())
+                | Q(sandbox_backend="hogland", task_run__status__in=cls._NON_TERMINAL_STATUSES)
+            )
+            .exclude(task_run__task__deleted=True)
+        )
+        if exclude_run_id is not None:
+            open_sessions = open_sessions.exclude(
+                task_run_id=exclude_run_id if isinstance(exclude_run_id, UUID) else UUID(exclude_run_id)
+            )
+        if (
+            created_by_id is not None
+            and open_sessions.filter(task_run__task__created_by_id=created_by_id).count() >= caps.per_user
+        ):
+            return "user"
+        if open_sessions.filter(team__organization_id=organization_id).count() >= caps.per_org:
+            return "org"
+        return None
+
+    @classmethod
+    def active_session_cap_detail(cls, origin_product: str, scope: ActiveSessionCapScope) -> str:
+        caps = cls.ORIGIN_ACTIVE_SESSION_CAPS[origin_product]
+        if scope == "user":
+            return (
+                f"You already have {caps.per_user} cloud sandboxes running. "
+                "Wait for one to finish or stop one, then try again."
+            )
+        return (
+            f"Your organization already has {caps.per_org} cloud sandboxes running. "
+            "Wait for one to finish or stop one, then try again."
+        )
+
+    def _warm_churn_exceeded(self) -> bool:
+        return (
+            SandboxSession.objects.unscoped()
+            .filter(
+                task_run__task__created_by_id=self.user.pk,
+                task_run__task__origin_product=self.task.origin_product,
+                prewarmed=True,
+                user_attributed_at__isnull=True,
+                ended_at__isnull=False,
+                ended_at__gte=timezone.now() - timedelta(hours=1),
+            )
+            .count()
+            >= self.WARM_CHURN_LIMIT_PER_HOUR
+        )
+
     def warm(
         self,
         *,
@@ -164,12 +251,13 @@ class SandboxWarmer:
           runs don't open PRs). The Code-app caller passes ``True`` so the activated run opens a PR.
 
         Raises ``QuotaLimitExceeded`` (402) / ``PermissionDenied`` (403) when gated, and ``Throttled``
-        (429) when the warm pool is full.
+        (429) when the warm pool is full or the user ended too many unclaimed warm sandboxes in the last hour.
         """
         # Quota is a gateway/cache call — check it before taking the row lock, never while holding it.
         origin_product = self.task.origin_product
         team = self.task.team
         self.enforce_quota(origin_product, team, self.user)
+        churned = self._warm_churn_exceeded()
         pool_full = self.at_capacity(origin_product, team, self.user)
 
         new_run: TaskRun
@@ -216,6 +304,9 @@ class SandboxWarmer:
 
             if pool_full:
                 raise Throttled(detail="Warm-pool capacity reached. Release an idle warm session and try again.")
+            if churned:
+                observe_warm_churn_throttled(origin_product)
+                raise Throttled(detail="Too many unused warm sandboxes in the last hour. Try again later.")
 
             run_state: dict[str, Any] = {
                 "await_user_message": True,

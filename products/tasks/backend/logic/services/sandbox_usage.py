@@ -16,17 +16,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from functools import wraps
-from typing import ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
-from django.db import transaction
-from django.db.models import Case, F, Q, Value, When
+from django.db import connection, transaction
+from django.db.models import Case, F, Q, QuerySet, Value, When
 from django.utils import timezone
 
 import structlog
 
 from posthog.dataclasses import frozen
 
+from products.tasks.backend.exceptions import ActiveSessionCapError
 from products.tasks.backend.logic.services.compute_quota import is_billable_compute
 from products.tasks.backend.logic.services.sandbox import SandboxBase, SandboxConfig, get_sandbox_class_for_sandbox_id
 from products.tasks.backend.logic.services.sandbox_pricing import (
@@ -36,6 +37,7 @@ from products.tasks.backend.logic.services.sandbox_pricing import (
     validate_compute_rate_cards,
     validate_reporting_window,
 )
+from products.tasks.backend.metrics import observe_active_session_cap_hit
 from products.tasks.backend.models import SandboxSession, Task, TaskClientProvenance, TaskRun
 
 logger = structlog.get_logger(__name__)
@@ -108,6 +110,37 @@ def measure_task_run_cpu_attribution(run_id: str | UUID, team_id: int) -> dict[s
     return measurements
 
 
+def _lock_organization_active_sessions(organization_id: UUID | str) -> None:
+    # Call only inside transaction.atomic(): the lock holds until commit, so a cap count and
+    # the attribution it guards cannot interleave with another start in the same organization.
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", [f"tasks-active-sessions:{organization_id}"])
+
+
+def enforce_active_session_cap(
+    *,
+    origin_product: str,
+    organization_id: UUID | str,
+    created_by_id: int | None,
+    run_id: str | UUID | None,
+    context: dict[str, Any],
+) -> None:
+    from products.tasks.backend.logic.services.warm import (  # noqa: PLC0415 — warm imports the temporal client, which imports this module
+        SandboxWarmer,
+    )
+
+    scope = SandboxWarmer.active_session_cap_hit(
+        origin_product,
+        organization_id=organization_id,
+        created_by_id=created_by_id,
+        exclude_run_id=run_id,
+    )
+    if scope is None:
+        return
+    observe_active_session_cap_hit(origin_product, scope)
+    raise ActiveSessionCapError(context, scope, SandboxWarmer.active_session_cap_detail(origin_product, scope))
+
+
 def open_sandbox_session(
     *,
     run_id: str | UUID,
@@ -124,11 +157,32 @@ def open_sandbox_session(
         with transaction.atomic():
             run = (
                 TaskRun.objects.select_for_update(of=("self",))
-                .select_related("task")
-                .only("id", "team_id", "state", "task__origin_product", "task__client_provenance")
+                .select_related("task", "team")
+                .only(
+                    "id",
+                    "team_id",
+                    "task_id",
+                    "state",
+                    "task__origin_product",
+                    "task__client_provenance",
+                    "task__created_by_id",
+                    "team__organization_id",
+                )
                 .get(id=run_id)
             )
             state = run.state or {}
+            if (
+                not state.get("await_user_message")
+                and not SandboxSession.objects.for_team(run.team_id).filter(sandbox_id=sandbox_id).exists()
+            ):
+                _lock_organization_active_sessions(run.team.organization_id)
+                enforce_active_session_cap(
+                    origin_product=run.task.origin_product,
+                    organization_id=run.team.organization_id,
+                    created_by_id=run.task.created_by_id,
+                    run_id=run.id,
+                    context={"team_id": run.team_id, "task_id": str(run.task_id), "run_id": str(run.id)},
+                )
             created_at = sandbox_created_at or timezone.now()
             shape = {
                 "team_id": run.team_id,
@@ -166,6 +220,8 @@ def open_sandbox_session(
                     ),
                 },
             )
+    except ActiveSessionCapError:
+        raise
     except Exception:
         logger.exception("sandbox_usage.ledger_write_failed", helper="open_sandbox_session")
         if required:
@@ -254,6 +310,16 @@ def record_task_run_user_activity(
     run_uuid = run_id if isinstance(run_id, UUID) else UUID(run_id)
     open_sessions = SandboxSession.objects.for_team(team_id).filter(task_run_id=run_uuid, ended_at__isnull=True)
     open_sessions.update(last_user_activity_at=now)
+    _stamp_user_attribution(open_sessions, run_uuid, team_id, cpu_attribution, now)
+
+
+def _stamp_user_attribution(
+    open_sessions: QuerySet[SandboxSession],
+    run_uuid: UUID,
+    team_id: int,
+    cpu_attribution: dict[str, SandboxCpuAttribution] | None,
+    now: datetime,
+) -> None:
     client_provenance = (
         TaskRun.objects.filter(id=run_uuid, team_id=team_id).values_list("task__client_provenance", flat=True).first()
     )
@@ -281,6 +347,37 @@ def record_task_run_user_activity(
             default=F("client_provenance"),
         ),
     )
+
+
+def claim_task_run_sandbox_sessions(
+    run_id: str | UUID,
+    team_id: int,
+    cpu_attribution: dict[str, SandboxCpuAttribution] | None = None,
+) -> None:
+    """Attribute the run's open warm sandboxes to its user, refusing at the active-session cap.
+
+    Raises ``ActiveSessionCapError`` and leaves the sessions unattributed when the creator or
+    organization already holds the max open attributed sessions.
+    """
+    run_uuid = run_id if isinstance(run_id, UUID) else UUID(run_id)
+    run = (
+        TaskRun.objects.select_related("task", "team")
+        .only("id", "team_id", "task_id", "task__origin_product", "task__created_by_id", "team__organization_id")
+        .get(id=run_uuid, team_id=team_id)
+    )
+    with transaction.atomic():
+        _lock_organization_active_sessions(run.team.organization_id)
+        open_sessions = SandboxSession.objects.for_team(team_id).filter(task_run_id=run_uuid, ended_at__isnull=True)
+        if not open_sessions.filter(user_attributed_at__isnull=True).exists():
+            return
+        enforce_active_session_cap(
+            origin_product=run.task.origin_product,
+            organization_id=run.team.organization_id,
+            created_by_id=run.task.created_by_id,
+            run_id=run_uuid,
+            context={"team_id": team_id, "task_id": str(run.task_id), "run_id": str(run_uuid)},
+        )
+        _stamp_user_attribution(open_sessions, run_uuid, team_id, cpu_attribution, timezone.now())
 
 
 @dataclass(frozen=True)
