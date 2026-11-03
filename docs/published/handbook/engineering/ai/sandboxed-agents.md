@@ -124,13 +124,14 @@ Local Desktop Pi sessions retain their existing project-resource behavior.
 Use `Task.create_and_run()` to launch a sandboxed agent from your product code:
 
 ```python
+from products.tasks.backend.facade.profiles import get_task_profile
 from products.tasks.backend.models import Task
 
 task = Task.create_and_run(
     team=team,
     title="Generate weekly signal report",
     description="Analyze error trends and generate a summary report with recommendations.",
-    origin_product=Task.OriginProduct.ERROR_TRACKING,  # or your product's origin
+    profile=get_task_profile("error_tracking"),  # or your product's profile
     user_id=user.id,
     posthog_mcp_scopes="read_only",  # or "full" if the agent needs write access
 )
@@ -143,7 +144,7 @@ task = Task.create_and_run(
 | `team`                   | Yes      | The team this task belongs to                                                                                                                                                                                                                                                                                                                                              |
 | `title`                  | Yes      | Human-readable task title                                                                                                                                                                                                                                                                                                                                                  |
 | `description`            | Yes      | Detailed description of what the agent should do                                                                                                                                                                                                                                                                                                                           |
-| `origin_product`         | Yes      | Which product created this task (see `Task.OriginProduct` choices)                                                                                                                                                                                                                                                                                                         |
+| `profile`                | Yes      | The task profile for this kind of task, registered by your product in `task_profiles.py`. It sets the origin, limits and defaults                                                                                                                                                                                                                                          |
 | `user_id`                | Yes      | User ID — used for feature flag validation and creating the scoped API key                                                                                                                                                                                                                                                                                                 |
 | `repository`             | Yes      | GitHub repo in `org/repo` format (e.g., `posthog/posthog-js`)                                                                                                                                                                                                                                                                                                              |
 | `posthog_mcp_scopes`     | No       | Scope preset or explicit scope list (default: `"full"`)                                                                                                                                                                                                                                                                                                                    |
@@ -648,7 +649,7 @@ task = Task.create_and_run(
     team=team,
     title="My restricted task",
     description="...",
-    origin_product=Task.OriginProduct.YOUR_PRODUCT,
+    profile=get_task_profile("your_product"),
     user_id=user.id,
     repository="org/repo",
     sandbox_environment_id=str(env.id),
