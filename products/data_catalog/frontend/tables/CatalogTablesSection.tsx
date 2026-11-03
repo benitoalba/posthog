@@ -10,11 +10,11 @@ import { AccessControlResourceType } from '~/types'
 import { ModelsOverviewErrorCallout } from 'products/data_modeling/frontend/ModelsOverviewErrorCallout'
 import { modelsOverviewLogic } from 'products/data_modeling/frontend/modelsOverviewLogic'
 import { viewsTabLogic } from 'products/data_modeling/frontend/viewsTabLogic'
-import { CheckEditorModal } from 'products/data_quality/frontend/CheckEditorModal'
 import { dataQualityCheckEditorLogic } from 'products/data_quality/frontend/dataQualityCheckEditorLogic'
 import { dataQualityOverviewLogic } from 'products/data_quality/frontend/overview/dataQualityOverviewLogic'
 import { overviewCheckEditorProps } from 'products/data_quality/frontend/overview/overviewCheckEditorProps'
-import { RunAllBanners } from 'products/data_quality/frontend/overview/RunAllBanners'
+import { QuillRunAllBanners } from 'products/data_quality/frontend/overview/QuillRunAllBanners'
+import { QuillCheckEditorDialog } from 'products/data_quality/frontend/QuillCheckEditorDialog'
 
 import { catalogTablesLogic } from '../catalogTablesLogic'
 import { NewCertificationModal } from '../components/NewCertificationModal'
@@ -101,7 +101,7 @@ function TablesContent(): JSX.Element {
     return (
         <>
             <LoadErrors />
-            <RunAllBanners />
+            <QuillRunAllBanners />
             <CatalogTablesTable />
         </>
     )
@@ -118,7 +118,7 @@ export function CatalogTablesSection(): JSX.Element {
                 <CatalogTablesToolbar />
                 <TablesContent />
             </section>
-            <CheckEditorModal />
+            <QuillCheckEditorDialog />
             <NewCertificationModal />
             <ViewsAccessControlModal />
         </BindLogic>
