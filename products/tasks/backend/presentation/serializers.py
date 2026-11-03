@@ -96,6 +96,7 @@ from products.tasks.backend.public_create import (
     request_fingerprint,
 )
 from products.tasks.backend.run_options import RunOptionsCaller, run_options_record, validate_run_options
+from products.tasks.backend.task_profiles import PUBLIC_RUN_OPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -1228,7 +1229,7 @@ class TaskRunOptionsRequestSerializer(serializers.Serializer):
 
     def to_internal_value(self, data: Any) -> dict[str, Any]:
         if isinstance(data, dict):
-            unsupported = sorted(set(data) - set(self.fields))
+            unsupported = sorted(set(data) - PUBLIC_RUN_OPTIONS)
             if unsupported:
                 raise serializers.ValidationError(
                     dict.fromkeys(unsupported, "This option is not supported by this endpoint.")

@@ -11,6 +11,7 @@ from products.tasks.backend.public_create import (
     public_idempotency_key,
     request_fingerprint,
 )
+from products.tasks.backend.task_profiles import PUBLIC_RUN_OPTIONS
 
 OPTION_SAMPLES: dict[str, tuple[Any, dict[str, Any]]] = {
     "runtime": ("pi", {"runtime": "pi"}),
@@ -28,8 +29,9 @@ OPTION_SAMPLES: dict[str, tuple[Any, dict[str, Any]]] = {
 
 
 class TestPublicCreateOptions(SimpleTestCase):
-    def test_every_option_the_endpoint_accepts_has_a_sample(self) -> None:
-        self.assertEqual(set(TaskRunOptionsRequestSerializer().fields), set(OPTION_SAMPLES))
+    def test_the_endpoint_accepts_exactly_the_public_run_options(self) -> None:
+        self.assertEqual(set(TaskRunOptionsRequestSerializer().fields), PUBLIC_RUN_OPTIONS)
+        self.assertEqual(set(OPTION_SAMPLES), PUBLIC_RUN_OPTIONS)
 
     @parameterized.expand([(name, value, expected) for name, (value, expected) in OPTION_SAMPLES.items()])
     def test_each_option_reaches_the_create_fields(self, name: str, value: Any, expected: dict[str, Any]) -> None:
